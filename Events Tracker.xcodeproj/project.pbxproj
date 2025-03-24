@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		2C2FD5282D91BACB00880CED /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 2C2FD5272D91BAC200880CED /* README.md */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		2C2FD4E82D91B77600880CED /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -27,6 +31,7 @@
 		2C2FD4D62D91B77500880CED /* Events Tracker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Events Tracker.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		2C2FD4E72D91B77600880CED /* Events TrackerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Events TrackerTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		2C2FD4F12D91B77600880CED /* Events TrackerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Events TrackerUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		2C2FD5272D91BAC200880CED /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -75,6 +80,7 @@
 		2C2FD4CD2D91B77500880CED = {
 			isa = PBXGroup;
 			children = (
+				2C2FD5272D91BAC200880CED /* README.md */,
 				2C2FD4D82D91B77500880CED /* Events Tracker */,
 				2C2FD4EA2D91B77600880CED /* Events TrackerTests */,
 				2C2FD4F42D91B77600880CED /* Events TrackerUITests */,
@@ -212,6 +218,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2C2FD5282D91BACB00880CED /* README.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
