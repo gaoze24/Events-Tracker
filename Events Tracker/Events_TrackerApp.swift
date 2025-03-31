@@ -13,5 +13,6 @@ struct Events_TrackerApp: App {
         WindowGroup {
             ContentView()
         }
+        .defaultSize(width: 1000, height: 800)
     }
 }
