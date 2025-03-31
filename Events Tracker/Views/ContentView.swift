@@ -20,7 +20,7 @@ struct ContentView: View {
                 Text("Settings").tag("Settings").font(.title2)
                     .padding(.vertical, 3)
             }
-            .frame(minWidth: 150, idealWidth: 200, maxWidth: 200)
+            .frame(minWidth: 200, idealWidth: 200, maxWidth: 250)
             .navigationTitle("Menu")
         } detail: {
             switch selectedItem {
