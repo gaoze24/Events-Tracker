@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		2C0B46DE2D9C3705006186F4 /* SQLite in Frameworks */ = {isa = PBXBuildFile; productRef = 2C0B46DD2D9C3705006186F4 /* SQLite */; };
 		2C2FD5282D91BACB00880CED /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 2C2FD5272D91BAC200880CED /* README.md */; };
 /* End PBXBuildFile section */
 
@@ -57,6 +58,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2C0B46DE2D9C3705006186F4 /* SQLite in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -118,6 +120,7 @@
 			);
 			name = "Events Tracker";
 			packageProductDependencies = (
+				2C0B46DD2D9C3705006186F4 /* SQLite */,
 			);
 			productName = "Events Tracker";
 			productReference = 2C2FD4D62D91B77500880CED /* Events Tracker.app */;
@@ -201,6 +204,9 @@
 			);
 			mainGroup = 2C2FD4CD2D91B77500880CED;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				2C0B46DC2D9C3705006186F4 /* XCRemoteSwiftPackageReference "SQLite" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 2C2FD4D72D91B77500880CED /* Products */;
 			projectDirPath = "";
@@ -598,6 +604,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		2C0B46DC2D9C3705006186F4 /* XCRemoteSwiftPackageReference "SQLite" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/stephencelis/SQLite.swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.15.3;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		2C0B46DD2D9C3705006186F4 /* SQLite */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2C0B46DC2D9C3705006186F4 /* XCRemoteSwiftPackageReference "SQLite" */;
+			productName = SQLite;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 2C2FD4CE2D91B77500880CED /* Project object */;
 }

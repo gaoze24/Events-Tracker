@@ -9,6 +9,7 @@ import SwiftUI
 
 struct ContentView: View {
     @State private var selectedItem: String? = "Home"
+    
     var body: some View {
         NavigationSplitView {
             List(selection: $selectedItem) {

@@ -8,10 +8,8 @@
 import SwiftUI
 
 struct HomeView: View {
-    // Mock data
-    let courses = ["MA1511", "CS1010", "EG1311"]
-    let upcomings = [("E1", 1), ("E2", 2), ("E3", 3)]
-    
+    @State private var courses: [Course] = []
+
     var body: some View {
         HStack(alignment: .top, spacing: 24) {
             VStack(alignment: .leading, spacing: 24) {
@@ -19,11 +17,11 @@ struct HomeView: View {
                     .font(.title2)
                     .bold()
                     .padding(.bottom, 4)) {
-                        ForEach(courses, id: \.self) { course in
+                        ForEach(courses, id: \.id) { course in
                             Button(action: {
                                 // handle course selection
                             }) {
-                                Text(course)
+                                Text(course.name)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding()
                             }
@@ -38,15 +36,16 @@ struct HomeView: View {
                     .font(.title2)
                     .bold()
                     .padding(.bottom, 4)) {
-                        ForEach(upcomings, id: \.0) { assignment in
+                        // Placeholder for upcoming events
+                        ForEach(courses) { assignment in
                             Button(action: {
                                 // handle assignment selection
                             }) {
                                 HStack {
-                                    Text("\(assignment.0)")
+                                    Text("\(assignment)")
                                         .bold()
                                     Spacer()
-                                    Text("\(assignment.1)")
+                                    Text("\(assignment)")
                                         .foregroundColor(.red)
                                 }
                                 .padding()
@@ -56,6 +55,25 @@ struct HomeView: View {
             }
         }
         .padding()
+        .onAppear(perform: loadCourses)
+    }
+
+    private func loadCourses() {
+        self.courses = DatabaseManager.shared.loadCourses()
+        fetchCourses()
+    }
+
+    private func fetchCourses() {
+        NetworkManager.shared.fetchCourses { result in
+            switch result {
+            case .success(let courses):
+                DispatchQueue.main.async {
+                    self.courses = courses
+                }
+            case .failure(let error):
+                print("Failed to fetch courses: \(error)")
+            }
+        }
     }
 }
 
