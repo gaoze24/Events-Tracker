@@ -36,6 +36,14 @@ xcodebuild -project 'Events Tracker.xcodeproj' \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
 ```
 
+Build a local `.app` bundle:
+
+```bash
+./scripts/build-app.sh
+```
+
+The script writes `dist/Events Tracker.app`. Set `CONFIGURATION=Release` if you want a release build.
+
 ## Project Layout
 
 - `Events Tracker/Models/` app state, Canvas API client, config, and local cache

@@ -1,0 +1,8 @@
+.DS_Store
+
+# Xcode and SwiftPM build output
+.build/
+build/
+dist/
+DerivedData/
+*.xcresult
