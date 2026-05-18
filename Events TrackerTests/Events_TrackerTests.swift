@@ -163,4 +163,206 @@ struct Events_TrackerTests {
         #expect(assignment.scoreDescription == "47.5 / 50")
         #expect(assignment.gradeDescription == "95%")
     }
+
+    @Test func canvasFileFormatsSizeAndPrefersCanvasURL() async throws {
+        let file = CanvasFile(
+            id: 10,
+            uuid: "file-uuid",
+            folderID: 5,
+            displayName: "Lecture Slides.pdf",
+            filename: "lecture-slides.pdf",
+            contentType: "application/pdf",
+            url: URL(string: "https://files.example.edu/download/10"),
+            htmlURL: URL(string: "https://canvas.example.edu/files/10"),
+            size: 1_572_864,
+            createdAt: nil,
+            updatedAt: Date(timeIntervalSince1970: 1_710_000_000),
+            unlockAt: nil,
+            locked: false,
+            hidden: false,
+            lockedForUser: false,
+            hiddenForUser: false,
+            thumbnailURL: nil
+        )
+
+        #expect(file.name == "Lecture Slides.pdf")
+        #expect(file.sizeDescription == "1.6 MB")
+        #expect(file.actionableURL?.absoluteString == "https://canvas.example.edu/files/10")
+        #expect(!file.isUnavailable)
+    }
+
+    @Test func canvasFolderBuildsItemSummaryAndUnavailableState() async throws {
+        let folder = CanvasFolder(
+            id: 42,
+            name: "Week 1",
+            fullName: "Course Files/Week 1",
+            parentFolderID: 1,
+            filesCount: 3,
+            foldersCount: 2,
+            position: 4,
+            locked: true,
+            hidden: false
+        )
+
+        #expect(folder.displayName == "Week 1")
+        #expect(folder.itemCountDescription == "3 files · 2 folders")
+        #expect(folder.isUnavailable)
+        #expect(folder.sortName == "course files/week 1")
+    }
+
+    @Test func courseWorkspaceModelsMatchSearchAcrossUsefulFields() async throws {
+        let module = CourseModule(
+            id: 7,
+            name: "Week 2",
+            position: 2,
+            workflowState: "active",
+            unlockAt: nil,
+            itemsCount: 1,
+            published: true,
+            items: [
+                CourseModuleItem(
+                    id: 70,
+                    moduleID: 7,
+                    position: 1,
+                    title: "Linear Algebra Notes",
+                    indent: 0,
+                    type: "Page",
+                    contentID: nil,
+                    htmlURL: nil,
+                    apiURL: nil,
+                    pageURL: nil,
+                    published: true,
+                    contentDetails: nil
+                )
+            ]
+        )
+
+        let file = CanvasFile(
+            id: 11,
+            uuid: nil,
+            folderID: 4,
+            displayName: "Project Rubric",
+            filename: "rubric.pdf",
+            contentType: "application/pdf",
+            url: nil,
+            htmlURL: nil,
+            size: nil,
+            createdAt: nil,
+            updatedAt: nil,
+            unlockAt: nil,
+            locked: nil,
+            hidden: nil,
+            lockedForUser: nil,
+            hiddenForUser: nil,
+            thumbnailURL: nil
+        )
+
+        let assignment = CourseAssignment(
+            id: 99,
+            name: "Midterm Reflection",
+            details: "<p>Write about matrix proofs.</p>",
+            dueAt: Date(timeIntervalSinceNow: 3_600),
+            unlockAt: nil,
+            lockAt: nil,
+            htmlURL: nil,
+            courseID: 1,
+            pointsPossible: 20,
+            submissionTypes: nil,
+            hasSubmittedSubmissions: false,
+            published: true,
+            gradingType: "points",
+            submission: nil
+        )
+
+        #expect(module.matchesSearch("algebra"))
+        #expect(file.matchesSearch("PDF"))
+        #expect(assignment.matchesSearch("matrix"))
+        #expect(assignment.matchesSearch("upcoming"))
+        #expect(!module.matchesSearch("biology"))
+    }
+
+    @Test func canvasFolderSortNamesSupportPathBasedOrdering() async throws {
+        let folders = [
+            CanvasFolder(
+                id: 2,
+                name: "Week 10",
+                fullName: "Course Files/Week 10",
+                parentFolderID: nil,
+                filesCount: nil,
+                foldersCount: nil,
+                position: nil,
+                locked: nil,
+                hidden: nil
+            ),
+            CanvasFolder(
+                id: 1,
+                name: "Week 01",
+                fullName: "Course Files/Week 01",
+                parentFolderID: nil,
+                filesCount: nil,
+                foldersCount: nil,
+                position: nil,
+                locked: nil,
+                hidden: nil
+            )
+        ]
+
+        let sortedFolders = folders.sorted {
+            $0.sortName.localizedCaseInsensitiveCompare($1.sortName) == .orderedAscending
+        }
+
+        #expect(sortedFolders.map(\.id) == [1, 2])
+    }
+
+    @Test func upcomingEventsClassifyDashboardWindow() async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+
+        let referenceDate = Date(timeIntervalSince1970: 1_710_000_000)
+        let todayDate = calendar.date(byAdding: .hour, value: 2, to: referenceDate)!
+        let thisWeekDate = calendar.date(byAdding: .day, value: 4, to: referenceDate)!
+        let laterDate = calendar.date(byAdding: .day, value: 10, to: referenceDate)!
+
+        #expect(makeUpcomingEvent(date: todayDate).dashboardWindow(referenceDate: referenceDate, calendar: calendar) == .today)
+        #expect(makeUpcomingEvent(date: thisWeekDate).dashboardWindow(referenceDate: referenceDate, calendar: calendar) == .thisWeek)
+        #expect(makeUpcomingEvent(date: laterDate).dashboardWindow(referenceDate: referenceDate, calendar: calendar) == .later)
+    }
+
+    @Test func missingSubmissionDetectsOverdueForDashboard() async throws {
+        let referenceDate = Date(timeIntervalSince1970: 1_710_000_000)
+        let overdue = MissingSubmission(
+            id: 1,
+            name: "Late Essay",
+            dueAt: Date(timeInterval: -3_600, since: referenceDate),
+            courseID: 1,
+            htmlURL: nil,
+            pointsPossible: 10
+        )
+        let upcoming = MissingSubmission(
+            id: 2,
+            name: "Future Essay",
+            dueAt: Date(timeInterval: 3_600, since: referenceDate),
+            courseID: 1,
+            htmlURL: nil,
+            pointsPossible: 10
+        )
+
+        #expect(overdue.isOverdue(referenceDate: referenceDate))
+        #expect(!upcoming.isOverdue(referenceDate: referenceDate))
+    }
+
+    private func makeUpcomingEvent(date: Date) -> UpcomingEvent {
+        UpcomingEvent(
+            id: UUID().uuidString,
+            title: "Quiz",
+            details: nil,
+            startAt: date,
+            endAt: date,
+            allDay: false,
+            contextCode: "course_1",
+            htmlURL: nil,
+            workflowState: "published",
+            assignment: nil
+        )
+    }
 }

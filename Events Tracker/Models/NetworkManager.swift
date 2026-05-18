@@ -138,6 +138,30 @@ final class NetworkManager {
         return modules.sorted(by: Self.sortModules)
     }
 
+    func fetchFolders(courseID: Int, using config: CanvasConfig) async throws -> [CanvasFolder] {
+        let folders: [CanvasFolder] = try await requestPaginatedArray(
+            path: "/api/v1/courses/\(courseID)/folders",
+            queryItems: [
+                URLQueryItem(name: "per_page", value: "100")
+            ],
+            config: config
+        )
+
+        return folders.sorted(by: Self.sortFolders)
+    }
+
+    func fetchFiles(folderID: Int, using config: CanvasConfig) async throws -> [CanvasFile] {
+        let files: [CanvasFile] = try await requestPaginatedArray(
+            path: "/api/v1/folders/\(folderID)/files",
+            queryItems: [
+                URLQueryItem(name: "per_page", value: "100")
+            ],
+            config: config
+        )
+
+        return files.sorted(by: Self.sortFiles)
+    }
+
     func fetchUpcomingEvents(using config: CanvasConfig) async throws -> [UpcomingEvent] {
         let queryItems = [
             URLQueryItem(name: "per_page", value: "100")
@@ -359,6 +383,23 @@ final class NetworkManager {
         }
 
         return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+    }
+
+    private static func sortFolders(_ lhs: CanvasFolder, _ rhs: CanvasFolder) -> Bool {
+        if lhs.sortName != rhs.sortName {
+            return lhs.sortName.localizedCaseInsensitiveCompare(rhs.sortName) == .orderedAscending
+        }
+
+        return lhs.id < rhs.id
+    }
+
+    private static func sortFiles(_ lhs: CanvasFile, _ rhs: CanvasFile) -> Bool {
+        let nameComparison = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+        if nameComparison != .orderedSame {
+            return nameComparison == .orderedAscending
+        }
+
+        return lhs.id < rhs.id
     }
 
     private static func sortAssignments(_ lhs: CourseAssignment, _ rhs: CourseAssignment) -> Bool {

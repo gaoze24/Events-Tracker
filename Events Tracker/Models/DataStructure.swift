@@ -192,6 +192,15 @@ struct CourseModule: Codable, Identifiable, Hashable {
         copy.items = items
         return copy
     }
+
+    func matchesSearch(_ query: String) -> Bool {
+        workspaceSearchMatches(
+            query,
+            in: name,
+            workflowState,
+            itemsCount.map { "\($0) items" }
+        ) || sortedItems.contains { $0.matchesSearch(query) }
+    }
 }
 
 struct CourseModuleItem: Codable, Identifiable, Hashable {
@@ -271,6 +280,17 @@ struct CourseModuleItem: Codable, Identifiable, Hashable {
 
         return String(format: "%.1f pts", points)
     }
+
+    func matchesSearch(_ query: String) -> Bool {
+        workspaceSearchMatches(
+            query,
+            in: title,
+            type,
+            pageURL,
+            contentDetails?.lockExplanation,
+            pointsDescription
+        )
+    }
 }
 
 struct ModuleItemContentDetails: Codable, Hashable {
@@ -290,6 +310,128 @@ struct ModuleItemContentDetails: Codable, Hashable {
         case lockedForUser = "locked_for_user"
         case lockExplanation = "lock_explanation"
         case htmlURL = "html_url"
+    }
+}
+
+struct CanvasFolder: Codable, Identifiable, Hashable {
+    let id: Int
+    let name: String
+    let fullName: String?
+    let parentFolderID: Int?
+    let filesCount: Int?
+    let foldersCount: Int?
+    let position: Int?
+    let locked: Bool?
+    let hidden: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case fullName = "full_name"
+        case parentFolderID = "parent_folder_id"
+        case filesCount = "files_count"
+        case foldersCount = "folders_count"
+        case position
+        case locked
+        case hidden
+    }
+
+    var displayName: String {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedName.isEmpty ? "Untitled Folder" : trimmedName
+    }
+
+    var sortName: String {
+        (fullName ?? name)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+    }
+
+    var itemCountDescription: String {
+        let fileCount = filesCount ?? 0
+        let folderCount = foldersCount ?? 0
+
+        if fileCount == 0 && folderCount == 0 {
+            return "No items"
+        }
+
+        let fileText = fileCount == 1 ? "1 file" : "\(fileCount) files"
+        let folderText = folderCount == 1 ? "1 folder" : "\(folderCount) folders"
+        return "\(fileText) · \(folderText)"
+    }
+
+    var isUnavailable: Bool {
+        locked == true || hidden == true
+    }
+
+    func matchesSearch(_ query: String) -> Bool {
+        workspaceSearchMatches(query, in: name, fullName, itemCountDescription)
+    }
+}
+
+struct CanvasFile: Codable, Identifiable, Hashable {
+    let id: Int
+    let uuid: String?
+    let folderID: Int?
+    let displayName: String?
+    let filename: String
+    let contentType: String?
+    let url: URL?
+    let htmlURL: URL?
+    let size: Int?
+    let createdAt: Date?
+    let updatedAt: Date?
+    let unlockAt: Date?
+    let locked: Bool?
+    let hidden: Bool?
+    let lockedForUser: Bool?
+    let hiddenForUser: Bool?
+    let thumbnailURL: URL?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case uuid
+        case folderID = "folder_id"
+        case displayName = "display_name"
+        case filename
+        case contentType = "content-type"
+        case url
+        case htmlURL = "html_url"
+        case size
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case unlockAt = "unlock_at"
+        case locked
+        case hidden
+        case lockedForUser = "locked_for_user"
+        case hiddenForUser = "hidden_for_user"
+        case thumbnailURL = "thumbnail_url"
+    }
+
+    var name: String {
+        let preferredName = displayName ?? filename
+        let trimmedName = preferredName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedName.isEmpty ? "Untitled File" : trimmedName
+    }
+
+    var sizeDescription: String? {
+        guard let size else {
+            return nil
+        }
+
+        return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
+    }
+
+    var actionableURL: URL? {
+        htmlURL ?? url
+    }
+
+    var isUnavailable: Bool {
+        locked == true || hidden == true || lockedForUser == true || hiddenForUser == true
+    }
+
+    func matchesSearch(_ query: String) -> Bool {
+        workspaceSearchMatches(query, in: name, filename, contentType, sizeDescription)
     }
 }
 
@@ -335,6 +477,12 @@ enum CourseAssignmentStatus: String, Codable, Hashable {
     case upcoming = "Upcoming"
     case unscheduled = "No Due Date"
     case excused = "Excused"
+}
+
+enum DashboardEventWindow: String, Codable, Hashable {
+    case today
+    case thisWeek
+    case later
 }
 
 struct AssignmentSubmission: Codable, Hashable {
@@ -502,6 +650,20 @@ struct CourseAssignment: Codable, Identifiable, Hashable {
         submission?.gradedAt ?? submission?.submittedAt ?? dueAt
     }
 
+    func matchesSearch(_ query: String) -> Bool {
+        workspaceSearchMatches(
+            query,
+            in: name,
+            summaryText,
+            status.rawValue,
+            pointsDescription,
+            scoreDescription,
+            gradeDescription,
+            gradingType,
+            submissionTypes?.joined(separator: " ")
+        )
+    }
+
     private static func formattedPoints(_ value: Double?) -> String? {
         guard let value else {
             return nil
@@ -605,6 +767,29 @@ struct UpcomingEvent: Codable, Identifiable, Hashable {
     var kindLabel: String {
         isAssignment ? "Assignment" : "Event"
     }
+
+    func dashboardWindow(
+        referenceDate: Date = Date(),
+        calendar: Calendar = .current
+    ) -> DashboardEventWindow? {
+        guard let displayDate else {
+            return nil
+        }
+
+        if calendar.isDate(displayDate, inSameDayAs: referenceDate) {
+            return .today
+        }
+
+        guard displayDate >= referenceDate else {
+            return nil
+        }
+
+        guard let weekEndDate = calendar.date(byAdding: .day, value: 7, to: referenceDate) else {
+            return .later
+        }
+
+        return displayDate <= weekEndDate ? .thisWeek : .later
+    }
 }
 
 struct MissingSubmission: Codable, Identifiable, Hashable {
@@ -638,6 +823,14 @@ struct MissingSubmission: Codable, Identifiable, Hashable {
         case courseID = "course_id"
         case htmlURL = "html_url"
         case pointsPossible = "points_possible"
+    }
+
+    func isOverdue(referenceDate: Date = Date()) -> Bool {
+        guard let dueAt else {
+            return false
+        }
+
+        return dueAt < referenceDate
     }
 }
 
@@ -685,5 +878,24 @@ private struct FlexibleIdentifier: Decodable {
         }
 
         stringValue = try container.decode(String.self)
+    }
+}
+
+private func workspaceSearchMatches(_ query: String, in values: String?...) -> Bool {
+    let normalizedQuery = query.normalizedWorkspaceSearchText
+    guard !normalizedQuery.isEmpty else {
+        return true
+    }
+
+    return values.contains { value in
+        value?.normalizedWorkspaceSearchText.contains(normalizedQuery) == true
+    }
+}
+
+private extension String {
+    var normalizedWorkspaceSearchText: String {
+        trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
     }
 }

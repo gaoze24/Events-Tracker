@@ -16,6 +16,10 @@ final class CanvasStore: ObservableObject {
     @Published private(set) var loadingCourseAssignmentIDs: Set<Int>
     @Published private(set) var courseModulesByCourseID: [Int: [CourseModule]]
     @Published private(set) var loadingCourseModuleIDs: Set<Int>
+    @Published private(set) var courseFoldersByCourseID: [Int: [CanvasFolder]]
+    @Published private(set) var courseFilesByFolderID: [Int: [CanvasFile]]
+    @Published private(set) var loadingCourseFolderIDs: Set<Int>
+    @Published private(set) var loadingFolderFileIDs: Set<Int>
     @Published private(set) var upcomingEvents: [UpcomingEvent]
     @Published private(set) var missingSubmissions: [MissingSubmission]
     @Published private(set) var profile: UserProfile?
@@ -47,6 +51,10 @@ final class CanvasStore: ObservableObject {
             loadingCourseAssignmentIDs = []
             courseModulesByCourseID = [:]
             loadingCourseModuleIDs = []
+            courseFoldersByCourseID = [:]
+            courseFilesByFolderID = [:]
+            loadingCourseFolderIDs = []
+            loadingFolderFileIDs = []
             upcomingEvents = snapshot.upcomingEvents
             missingSubmissions = snapshot.missingSubmissions
             profile = snapshot.profile
@@ -57,6 +65,10 @@ final class CanvasStore: ObservableObject {
             loadingCourseAssignmentIDs = []
             courseModulesByCourseID = [:]
             loadingCourseModuleIDs = []
+            courseFoldersByCourseID = [:]
+            courseFilesByFolderID = [:]
+            loadingCourseFolderIDs = []
+            loadingFolderFileIDs = []
             upcomingEvents = []
             missingSubmissions = []
             profile = nil
@@ -144,6 +156,10 @@ final class CanvasStore: ObservableObject {
             loadingCourseAssignmentIDs = []
             courseModulesByCourseID = [:]
             loadingCourseModuleIDs = []
+            courseFoldersByCourseID = [:]
+            courseFilesByFolderID = [:]
+            loadingCourseFolderIDs = []
+            loadingFolderFileIDs = []
             try databaseManager.saveSnapshot(snapshot)
         } catch {
             errorMessage = error.localizedDescription
@@ -180,6 +196,10 @@ final class CanvasStore: ObservableObject {
         loadingCourseAssignmentIDs = []
         courseModulesByCourseID = [:]
         loadingCourseModuleIDs = []
+        courseFoldersByCourseID = [:]
+        courseFilesByFolderID = [:]
+        loadingCourseFolderIDs = []
+        loadingFolderFileIDs = []
         upcomingEvents = []
         missingSubmissions = []
         profile = nil
@@ -231,6 +251,22 @@ final class CanvasStore: ObservableObject {
         }
 
         return courseAssignmentsByCourseID[courseID] ?? []
+    }
+
+    func folders(for courseID: Int?) -> [CanvasFolder] {
+        guard let courseID else {
+            return []
+        }
+
+        return courseFoldersByCourseID[courseID] ?? []
+    }
+
+    func files(for folderID: Int?) -> [CanvasFile] {
+        guard let folderID else {
+            return []
+        }
+
+        return courseFilesByFolderID[folderID] ?? []
     }
 
     func hasLoadedAssignments(for courseID: Int?) -> Bool {
@@ -323,6 +359,102 @@ final class CanvasStore: ObservableObject {
         }
 
         loadingCourseModuleIDs.remove(courseID)
+    }
+
+    func hasLoadedFolders(for courseID: Int?) -> Bool {
+        guard let courseID else {
+            return false
+        }
+
+        return courseFoldersByCourseID[courseID] != nil
+    }
+
+    func isLoadingFolders(for courseID: Int?) -> Bool {
+        guard let courseID else {
+            return false
+        }
+
+        return loadingCourseFolderIDs.contains(courseID)
+    }
+
+    func hasLoadedFiles(for folderID: Int?) -> Bool {
+        guard let folderID else {
+            return false
+        }
+
+        return courseFilesByFolderID[folderID] != nil
+    }
+
+    func isLoadingFiles(for folderID: Int?) -> Bool {
+        guard let folderID else {
+            return false
+        }
+
+        return loadingFolderFileIDs.contains(folderID)
+    }
+
+    func loadCourseFilesIfNeeded(for courseID: Int?) async {
+        guard
+            let courseID,
+            courseFoldersByCourseID[courseID] == nil,
+            !loadingCourseFolderIDs.contains(courseID)
+        else {
+            return
+        }
+
+        await loadCourseFiles(for: courseID)
+    }
+
+    func loadCourseFiles(for courseID: Int) async {
+        guard config.isComplete else {
+            errorMessage = CanvasServiceError.incompleteConfiguration.localizedDescription
+            return
+        }
+
+        loadingCourseFolderIDs.insert(courseID)
+
+        do {
+            let folders = try await networkManager.fetchFolders(courseID: courseID, using: config)
+            courseFoldersByCourseID[courseID] = folders
+
+            if let firstFolderID = folders.first?.id, courseFilesByFolderID[firstFolderID] == nil {
+                await loadFiles(for: firstFolderID)
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        loadingCourseFolderIDs.remove(courseID)
+    }
+
+    func loadFilesIfNeeded(for folderID: Int?) async {
+        guard
+            let folderID,
+            courseFilesByFolderID[folderID] == nil,
+            !loadingFolderFileIDs.contains(folderID)
+        else {
+            return
+        }
+
+        await loadFiles(for: folderID)
+    }
+
+    func loadFiles(for folderID: Int) async {
+        guard config.isComplete else {
+            errorMessage = CanvasServiceError.incompleteConfiguration.localizedDescription
+            return
+        }
+
+        loadingFolderFileIDs.insert(folderID)
+
+        do {
+            let files = try await networkManager.fetchFiles(folderID: folderID, using: config)
+            courseFilesByFolderID[folderID] = files
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        loadingFolderFileIDs.remove(folderID)
     }
 
     private func applySnapshot(_ snapshot: CanvasSnapshot) {
