@@ -162,37 +162,39 @@ struct SettingsView: View {
                     Section("Local Data") {
                         Text("Changing the Canvas URL or token clears the cached dashboard so data from different accounts never mixes together.")
                     }
+
+                    Section {
+                        HStack(spacing: 12) {
+                            Button("Save") {
+                                _ = saveConfiguration()
+                            }
+
+                            Button("Save and Sync") {
+                                guard saveConfiguration() else {
+                                    return
+                                }
+
+                                Task {
+                                    await store.refresh()
+                                }
+                            }
+                            .disabled(store.isSyncing)
+
+                            Button("Clear Cached Data", role: .destructive) {
+                                store.clearLocalData()
+                                statusMessage = "Cached dashboard cleared."
+                            }
+
+                            Spacer()
+                        }
+
+                        if let statusMessage {
+                            Text(statusMessage)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 .formStyle(.grouped)
-
-                HStack(spacing: 12) {
-                    Button("Save") {
-                        _ = saveConfiguration()
-                    }
-
-                    Button("Save and Sync") {
-                        guard saveConfiguration() else {
-                            return
-                        }
-
-                        Task {
-                            await store.refresh()
-                        }
-                    }
-                    .disabled(store.isSyncing)
-
-                    Button("Clear Cached Data", role: .destructive) {
-                        store.clearLocalData()
-                        statusMessage = "Cached dashboard cleared."
-                    }
-
-                    Spacer()
-                }
-
-                if let statusMessage {
-                    Text(statusMessage)
-                        .foregroundStyle(.secondary)
-                }
             }
             .padding(24)
         }
