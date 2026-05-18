@@ -31,6 +31,7 @@ final class CanvasStore: ObservableObject {
     private let configManager: CanvasConfigManager
     private let databaseManager: DatabaseManager
     private let networkManager: NetworkManager
+    private let reminderService: AssignmentReminderService
     private let relativeFormatter = RelativeDateTimeFormatter()
 
     init(
@@ -44,6 +45,12 @@ final class CanvasStore: ObservableObject {
 
         let savedConfig = configManager.loadConfig()
         config = savedConfig
+        reminderService = AssignmentReminderService(
+            config: savedConfig,
+            networkManager: networkManager,
+            telegramManager: .shared,
+            historyManager: .shared
+        )
 
         if let snapshot = databaseManager.loadSnapshot() {
             courses = snapshot.courses
@@ -169,11 +176,17 @@ final class CanvasStore: ObservableObject {
     }
 
     @discardableResult
-    func saveConfiguration(baseURL: String, token: String, lookaheadDays: Int) throws -> Bool {
+    func saveConfiguration(
+        baseURL: String,
+        token: String,
+        lookaheadDays: Int,
+        telegramReminders: TelegramReminderConfig
+    ) throws -> Bool {
         let updatedConfig = CanvasConfig(
             baseURL: baseURL,
             token: token,
-            lookaheadDays: lookaheadDays
+            lookaheadDays: lookaheadDays,
+            telegramReminders: telegramReminders
         )
 
         let credentialsChanged = updatedConfig.normalizedBaseURL != config.normalizedBaseURL
@@ -181,6 +194,7 @@ final class CanvasStore: ObservableObject {
 
         try configManager.saveConfig(updatedConfig)
         config = updatedConfig
+        reminderService.updateConfig(updatedConfig)
         errorMessage = nil
 
         if credentialsChanged {
@@ -455,6 +469,31 @@ final class CanvasStore: ObservableObject {
         }
 
         loadingFolderFileIDs.remove(folderID)
+    }
+
+    func startTelegramReminderService() {
+        reminderService.start()
+    }
+
+    func stopTelegramReminderService() {
+        reminderService.stop()
+    }
+
+    func runTelegramReminderCheckNow() async {
+        await reminderService.runCheckNow()
+        errorMessage = reminderService.lastErrorMessage
+    }
+
+    func discoverTelegramChats(botToken: String) async throws -> [TelegramChat] {
+        try await TelegramManager.shared.fetchRecentChats(botToken: botToken)
+    }
+
+    func sendTelegramTestMessage(botToken: String, chatID: String) async throws {
+        try await TelegramManager.shared.sendMessage(
+            botToken: botToken,
+            chatID: chatID,
+            text: "Events Tracker Telegram reminders are connected."
+        )
     }
 
     private func applySnapshot(_ snapshot: CanvasSnapshot) {
