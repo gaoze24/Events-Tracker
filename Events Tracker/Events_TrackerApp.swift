@@ -16,6 +16,7 @@ struct Events_TrackerApp: App {
             ContentView()
                 .environmentObject(store)
                 .task {
+                    store.startTelegramReminderService()
                     await store.refreshIfNeeded()
                 }
         }

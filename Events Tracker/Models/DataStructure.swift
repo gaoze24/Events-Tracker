@@ -7,10 +7,109 @@
 
 import Foundation
 
+struct TelegramReminderConfig: Codable, Equatable {
+    var isEnabled: Bool = false
+    var botToken: String = ""
+    var chatID: String = ""
+    var reminderWindowHours: Int = 24
+    var checkIntervalMinutes: Int = 30
+    var repeatIntervalHours: Int = 24
+
+    enum CodingKeys: String, CodingKey {
+        case isEnabled
+        case botToken
+        case chatID
+        case reminderWindowHours
+        case checkIntervalMinutes
+        case repeatIntervalHours
+    }
+
+    init(
+        isEnabled: Bool = false,
+        botToken: String = "",
+        chatID: String = "",
+        reminderWindowHours: Int = 24,
+        checkIntervalMinutes: Int = 30,
+        repeatIntervalHours: Int = 24
+    ) {
+        self.isEnabled = isEnabled
+        self.botToken = botToken
+        self.chatID = chatID
+        self.reminderWindowHours = reminderWindowHours
+        self.checkIntervalMinutes = checkIntervalMinutes
+        self.repeatIntervalHours = repeatIntervalHours
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        botToken = try container.decodeIfPresent(String.self, forKey: .botToken) ?? ""
+        chatID = try container.decodeIfPresent(String.self, forKey: .chatID) ?? ""
+        reminderWindowHours = try container.decodeIfPresent(Int.self, forKey: .reminderWindowHours) ?? 24
+        checkIntervalMinutes = try container.decodeIfPresent(Int.self, forKey: .checkIntervalMinutes) ?? 30
+        repeatIntervalHours = try container.decodeIfPresent(Int.self, forKey: .repeatIntervalHours) ?? 24
+    }
+
+    var trimmedBotToken: String {
+        botToken.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var trimmedChatID: String {
+        chatID.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var normalizedReminderWindowHours: Int {
+        min(max(reminderWindowHours, 1), 168)
+    }
+
+    var normalizedCheckIntervalMinutes: Int {
+        min(max(checkIntervalMinutes, 5), 240)
+    }
+
+    var normalizedRepeatIntervalHours: Int {
+        min(max(repeatIntervalHours, 1), 168)
+    }
+
+    var isComplete: Bool {
+        !trimmedBotToken.isEmpty && !trimmedChatID.isEmpty
+    }
+}
+
 struct CanvasConfig: Codable, Equatable {
     var baseURL: String = ""
     var token: String = ""
     var lookaheadDays: Int = 14
+    var telegramReminders: TelegramReminderConfig = TelegramReminderConfig()
+
+    enum CodingKeys: String, CodingKey {
+        case baseURL
+        case token
+        case lookaheadDays
+        case telegramReminders
+    }
+
+    init(
+        baseURL: String = "",
+        token: String = "",
+        lookaheadDays: Int = 14,
+        telegramReminders: TelegramReminderConfig = TelegramReminderConfig()
+    ) {
+        self.baseURL = baseURL
+        self.token = token
+        self.lookaheadDays = lookaheadDays
+        self.telegramReminders = telegramReminders
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        baseURL = try container.decodeIfPresent(String.self, forKey: .baseURL) ?? ""
+        token = try container.decodeIfPresent(String.self, forKey: .token) ?? ""
+        lookaheadDays = try container.decodeIfPresent(Int.self, forKey: .lookaheadDays) ?? 14
+        telegramReminders = try container.decodeIfPresent(
+            TelegramReminderConfig.self,
+            forKey: .telegramReminders
+        ) ?? TelegramReminderConfig()
+    }
 
     var normalizedBaseURL: String {
         baseURL
