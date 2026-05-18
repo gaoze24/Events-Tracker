@@ -1,4 +1,5 @@
 .DS_Store
+.worktrees/
 
 # Xcode and SwiftPM build output
 .build/
