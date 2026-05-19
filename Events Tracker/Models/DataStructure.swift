@@ -50,6 +50,15 @@ struct TelegramReminderConfig: Codable, Equatable {
         repeatIntervalHours = try container.decodeIfPresent(Int.self, forKey: .repeatIntervalHours) ?? 24
     }
 
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(isEnabled, forKey: .isEnabled)
+        try container.encode(chatID, forKey: .chatID)
+        try container.encode(reminderWindowHours, forKey: .reminderWindowHours)
+        try container.encode(checkIntervalMinutes, forKey: .checkIntervalMinutes)
+        try container.encode(repeatIntervalHours, forKey: .repeatIntervalHours)
+    }
+
     var trimmedBotToken: String {
         botToken.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -109,6 +118,13 @@ struct CanvasConfig: Codable, Equatable {
             TelegramReminderConfig.self,
             forKey: .telegramReminders
         ) ?? TelegramReminderConfig()
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(baseURL, forKey: .baseURL)
+        try container.encode(lookaheadDays, forKey: .lookaheadDays)
+        try container.encode(telegramReminders, forKey: .telegramReminders)
     }
 
     var normalizedBaseURL: String {
@@ -534,6 +550,85 @@ struct CanvasFile: Codable, Identifiable, Hashable {
     }
 }
 
+struct CourseAnnouncement: Codable, Identifiable, Hashable {
+    let id: Int
+    let title: String
+    let message: String?
+    let postedAt: Date?
+    let delayedPostAt: Date?
+    let contextCode: String?
+    let htmlURL: URL?
+    let readState: String?
+    let lockedForUser: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case message
+        case postedAt = "posted_at"
+        case delayedPostAt = "delayed_post_at"
+        case contextCode = "context_code"
+        case htmlURL = "html_url"
+        case readState = "read_state"
+        case lockedForUser = "locked_for_user"
+    }
+
+    var summaryText: String? {
+        strippedCanvasHTML(message)
+    }
+
+    var displayDate: Date? {
+        postedAt ?? delayedPostAt
+    }
+
+    var courseID: Int? {
+        guard let contextCode, contextCode.hasPrefix("course_") else {
+            return nil
+        }
+
+        return Int(contextCode.replacingOccurrences(of: "course_", with: ""))
+    }
+
+    var isUnread: Bool {
+        readState?.localizedCaseInsensitiveCompare("unread") == .orderedSame
+    }
+
+    func matchesSearch(_ query: String) -> Bool {
+        workspaceSearchMatches(
+            query,
+            in: title,
+            summaryText,
+            readState
+        )
+    }
+}
+
+struct CourseSyllabus: Codable, Identifiable, Hashable {
+    let id: Int
+    let name: String
+    let syllabusBody: String?
+    let htmlURL: URL?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case syllabusBody = "syllabus_body"
+        case htmlURL = "html_url"
+    }
+
+    var summaryText: String? {
+        strippedCanvasHTML(syllabusBody)
+    }
+
+    var hasContent: Bool {
+        summaryText?.isEmpty == false
+    }
+
+    func matchesSearch(_ query: String) -> Bool {
+        workspaceSearchMatches(query, in: name, summaryText)
+    }
+}
+
 struct CanvasAssignment: Codable, Hashable {
     let id: Int
     let name: String
@@ -706,17 +801,7 @@ struct CourseAssignment: Codable, Identifiable, Hashable {
     }
 
     var summaryText: String? {
-        guard let details, !details.isEmpty else {
-            return nil
-        }
-
-        let strippedText = details
-            .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
-            .replacingOccurrences(of: "&nbsp;", with: " ")
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        return strippedText.isEmpty ? nil : strippedText
+        strippedCanvasHTML(details)
     }
 
     var pointsDescription: String? {
@@ -989,6 +1074,25 @@ private func workspaceSearchMatches(_ query: String, in values: String?...) -> B
     return values.contains { value in
         value?.normalizedWorkspaceSearchText.contains(normalizedQuery) == true
     }
+}
+
+private func strippedCanvasHTML(_ html: String?) -> String? {
+    guard let html, !html.isEmpty else {
+        return nil
+    }
+
+    let strippedText = html
+        .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+        .replacingOccurrences(of: "&nbsp;", with: " ")
+        .replacingOccurrences(of: "&amp;", with: "&")
+        .replacingOccurrences(of: "&lt;", with: "<")
+        .replacingOccurrences(of: "&gt;", with: ">")
+        .replacingOccurrences(of: "&quot;", with: "\"")
+        .replacingOccurrences(of: "&#39;", with: "'")
+        .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+
+    return strippedText.isEmpty ? nil : strippedText
 }
 
 private extension String {

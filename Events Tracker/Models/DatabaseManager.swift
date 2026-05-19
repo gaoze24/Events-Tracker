@@ -14,7 +14,7 @@ final class DatabaseManager {
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
-    private init() {
+    init(cacheURL: URL? = nil) {
         let fileManager = FileManager.default
         let baseDirectory = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.homeDirectoryForCurrentUser
@@ -22,7 +22,7 @@ final class DatabaseManager {
 
         try? fileManager.createDirectory(at: appDirectory, withIntermediateDirectories: true)
 
-        cacheURL = appDirectory.appendingPathComponent("canvas-cache.json")
+        self.cacheURL = cacheURL ?? appDirectory.appendingPathComponent("canvas-cache.json")
 
         encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

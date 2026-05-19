@@ -9,6 +9,7 @@ import Foundation
 import Testing
 @testable import Events_Tracker
 
+@Suite(.serialized)
 struct Events_TrackerTests {
     @Test func configNormalizationTrimsWhitespace() async throws {
         let config = CanvasConfig(
@@ -355,6 +356,80 @@ struct Events_TrackerTests {
         #expect(config.telegramReminders.repeatIntervalHours == 24)
     }
 
+    @Test func canvasConfigManagerMigratesSensitiveTokensOutOfJSON() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let fileManager = FileManager.default
+        try? fileManager.removeItem(at: configURL)
+        defer { try? fileManager.removeItem(at: configURL) }
+
+        let legacyConfig = """
+        {
+          "baseURL" : "https://canvas.example.edu",
+          "lookaheadDays" : 14,
+          "telegramReminders" : {
+            "isEnabled" : true,
+            "botToken" : " 123:abc ",
+            "chatID" : "456",
+            "reminderWindowHours" : 24,
+            "checkIntervalMinutes" : 30,
+            "repeatIntervalHours" : 24
+          },
+          "token" : " abc123 "
+        }
+        """
+        try legacyConfig.data(using: .utf8)?.write(to: configURL)
+
+        let tokenStore = InMemoryCanvasTokenStore()
+        let manager = CanvasConfigManager(configURL: configURL, tokenStore: tokenStore)
+
+        let config = manager.loadConfig()
+        let storedJSON = try #require(String(data: Data(contentsOf: configURL), encoding: .utf8))
+
+        #expect(config.trimmedToken == "abc123")
+        #expect(config.telegramReminders.trimmedBotToken == "123:abc")
+        #expect(try tokenStore.token(for: .canvasAccessToken) == "abc123")
+        #expect(try tokenStore.token(for: .telegramBotToken) == "123:abc")
+        #expect(!storedJSON.contains("abc123"))
+        #expect(!storedJSON.contains("123:abc"))
+        #expect(!storedJSON.contains("\"token\""))
+        #expect(!storedJSON.contains("\"botToken\""))
+    }
+
+    @Test func canvasConfigManagerStoresSensitiveTokensOutsideJSONWhenSaving() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let fileManager = FileManager.default
+        try? fileManager.removeItem(at: configURL)
+        defer { try? fileManager.removeItem(at: configURL) }
+
+        let tokenStore = InMemoryCanvasTokenStore()
+        let manager = CanvasConfigManager(configURL: configURL, tokenStore: tokenStore)
+        let config = CanvasConfig(
+            baseURL: "https://canvas.example.edu",
+            token: " abc123 ",
+            lookaheadDays: 14,
+            telegramReminders: TelegramReminderConfig(
+                isEnabled: true,
+                botToken: " 123:abc ",
+                chatID: "456",
+                reminderWindowHours: 24,
+                checkIntervalMinutes: 30,
+                repeatIntervalHours: 24
+            )
+        )
+
+        try manager.saveConfig(config)
+        let storedJSON = try #require(String(data: Data(contentsOf: configURL), encoding: .utf8))
+
+        #expect(try tokenStore.token(for: .canvasAccessToken) == "abc123")
+        #expect(try tokenStore.token(for: .telegramBotToken) == "123:abc")
+        #expect(storedJSON.contains("canvas.example.edu"))
+        #expect(storedJSON.contains("\"chatID\""))
+        #expect(!storedJSON.contains("abc123"))
+        #expect(!storedJSON.contains("123:abc"))
+        #expect(!storedJSON.contains("\"token\""))
+        #expect(!storedJSON.contains("\"botToken\""))
+    }
+
     @Test func upcomingEventPrefersAssignmentDueDate() async throws {
         let dueDate = Date(timeIntervalSince1970: 1_710_000_000)
         let startDate = Date(timeIntervalSince1970: 1_709_000_000)
@@ -411,6 +486,124 @@ struct Events_TrackerTests {
         #expect(moduleItem.actionableURL?.absoluteString == "https://canvas.example.edu/courses/1/quizzes/77")
         #expect(moduleItem.systemImageName == "checklist")
         #expect(moduleItem.pointsDescription == "25 pts")
+    }
+
+    @Test func courseAnnouncementBuildsSummaryAndSearchMetadata() async throws {
+        let postedAt = Date(timeIntervalSince1970: 1_710_000_000)
+        let announcement = CourseAnnouncement(
+            id: 88,
+            title: "Week 2 Update",
+            message: "<p>Read <strong>chapter</strong>&nbsp;2 before lab.</p>",
+            postedAt: postedAt,
+            delayedPostAt: nil,
+            contextCode: "course_42",
+            htmlURL: URL(string: "https://canvas.example.edu/courses/42/discussion_topics/88"),
+            readState: "unread",
+            lockedForUser: false
+        )
+
+        #expect(announcement.summaryText == "Read chapter 2 before lab.")
+        #expect(announcement.displayDate == postedAt)
+        #expect(announcement.courseID == 42)
+        #expect(announcement.isUnread)
+        #expect(announcement.matchesSearch("chapter 2"))
+        #expect(announcement.matchesSearch("unread"))
+    }
+
+    @Test func courseSyllabusBuildsReadableSummaryFromHTML() async throws {
+        let syllabus = CourseSyllabus(
+            id: 42,
+            name: "Biology",
+            syllabusBody: "<h1>Course Policy</h1><p>Bring a notebook&nbsp;daily.</p>",
+            htmlURL: URL(string: "https://canvas.example.edu/courses/42")
+        )
+
+        #expect(syllabus.summaryText == "Course Policy Bring a notebook daily.")
+        #expect(syllabus.hasContent)
+        #expect(syllabus.matchesSearch("notebook daily"))
+    }
+
+    @Test func networkManagerFetchesAnnouncementsWithCourseContext() async throws {
+        let session = makeCapturingURLSession { request in
+            guard
+                let url = request.url,
+                let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            else {
+                throw CanvasServiceError.invalidResponse
+            }
+
+            let data = """
+            [
+              {
+                "id" : 1,
+                "title" : "Older",
+                "message" : "<p>Older note</p>",
+                "posted_at" : "2024-03-01T12:00:00Z",
+                "context_code" : "course_42",
+                "html_url" : "https://canvas.example.edu/courses/42/discussion_topics/1",
+                "read_state" : "read",
+                "locked_for_user" : false
+              },
+              {
+                "id" : 2,
+                "title" : "Newer",
+                "message" : "<p>Newer note</p>",
+                "posted_at" : "2024-03-02T12:00:00Z",
+                "context_code" : "course_42",
+                "html_url" : "https://canvas.example.edu/courses/42/discussion_topics/2",
+                "read_state" : "unread",
+                "locked_for_user" : false
+              }
+            ]
+            """.data(using: .utf8)!
+
+            return (response, data)
+        }
+        let manager = NetworkManager(session: session)
+
+        let announcements = try await manager.fetchAnnouncements(courseID: 42, using: makeCanvasConfig())
+        let request = try #require(CapturingURLProtocol.lastRequest)
+        let requestURL = try #require(request.url)
+        let components = try #require(URLComponents(url: requestURL, resolvingAgainstBaseURL: false))
+        let queryItems = components.queryItems ?? []
+
+        #expect(components.path == "/api/v1/announcements")
+        #expect(queryItems.contains(URLQueryItem(name: "context_codes[]", value: "course_42")))
+        #expect(queryItems.contains(URLQueryItem(name: "per_page", value: "100")))
+        #expect(announcements.map(\.id) == [2, 1])
+    }
+
+    @Test func networkManagerFetchesCourseSyllabusBody() async throws {
+        let session = makeCapturingURLSession { request in
+            guard
+                let url = request.url,
+                let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            else {
+                throw CanvasServiceError.invalidResponse
+            }
+
+            let data = """
+            {
+              "id" : 42,
+              "name" : "Biology",
+              "syllabus_body" : "<p>Welcome to class.</p>",
+              "html_url" : "https://canvas.example.edu/courses/42"
+            }
+            """.data(using: .utf8)!
+
+            return (response, data)
+        }
+        let manager = NetworkManager(session: session)
+
+        let syllabus = try await manager.fetchSyllabus(courseID: 42, using: makeCanvasConfig())
+        let request = try #require(CapturingURLProtocol.lastRequest)
+        let requestURL = try #require(request.url)
+        let components = try #require(URLComponents(url: requestURL, resolvingAgainstBaseURL: false))
+        let queryItems = components.queryItems ?? []
+
+        #expect(components.path == "/api/v1/courses/42")
+        #expect(queryItems.contains(URLQueryItem(name: "include[]", value: "syllabus_body")))
+        #expect(syllabus.summaryText == "Welcome to class.")
     }
 
     @Test func courseStudentEnrollmentPrefersStudentScores() async throws {
@@ -647,6 +840,277 @@ struct Events_TrackerTests {
         #expect(sortedFolders.map(\.id) == [1, 2])
     }
 
+    @Test func courseDetailCacheSnapshotPrunesExpiredAndLeastRecentCourses() async throws {
+        let referenceDate = Date(timeIntervalSince1970: 1_710_000_000)
+        let expiredAccessDate = Date(timeInterval: -3_600, since: referenceDate)
+        let middleAccessDate = Date(timeInterval: -240, since: referenceDate)
+        let recentAccessDate = Date(timeInterval: -60, since: referenceDate)
+        let snapshot = CourseDetailCacheSnapshot(
+            assignmentsByCourseID: [
+                1: [makeCourseAssignment(id: 1, name: "Protected", dueAt: referenceDate, courseID: 1)],
+                2: [makeCourseAssignment(id: 2, name: "Middle", dueAt: referenceDate, courseID: 2)],
+                3: [makeCourseAssignment(id: 3, name: "Recent", dueAt: referenceDate, courseID: 3)]
+            ],
+            modulesByCourseID: [:],
+            foldersByCourseID: [
+                1: [makeCanvasFolder(id: 101, name: "Protected Files")],
+                2: [makeCanvasFolder(id: 201, name: "Middle Files")],
+                3: [makeCanvasFolder(id: 301, name: "Recent Files")]
+            ],
+            filesByFolderID: [
+                101: [makeCanvasFile(id: 1001, name: "protected.pdf")],
+                201: [makeCanvasFile(id: 2001, name: "middle.pdf")],
+                301: [makeCanvasFile(id: 3001, name: "recent.pdf")]
+            ],
+            announcementsByCourseID: [:],
+            syllabusByCourseID: [:],
+            courseAccessedAtByCourseID: [
+                1: expiredAccessDate,
+                2: middleAccessDate,
+                3: recentAccessDate
+            ],
+            savedAt: referenceDate
+        )
+
+        let pruned = snapshot.prunedForMemory(
+            now: referenceDate,
+            timeToLive: 30 * 60,
+            maximumCourses: 2,
+            alwaysKeepingCourseIDs: [1]
+        )
+
+        #expect(pruned.assignmentsByCourseID.keys.sorted() == [1, 3])
+        #expect(pruned.foldersByCourseID.keys.sorted() == [1, 3])
+        #expect(pruned.filesByFolderID.keys.sorted() == [101, 301])
+        #expect(pruned.courseAccessedAtByCourseID.keys.sorted() == [1, 3])
+    }
+
+    @Test func courseDetailCacheManagerDropsExpiredDiskCache() async throws {
+        let cacheURL = makeCourseDetailCacheTempURL()
+        let fileManager = FileManager.default
+        try? fileManager.removeItem(at: cacheURL)
+        defer { try? fileManager.removeItem(at: cacheURL) }
+
+        let referenceDate = Date(timeIntervalSince1970: 1_710_000_000)
+        let manager = CourseDetailCacheManager(cacheURL: cacheURL)
+        let snapshot = CourseDetailCacheSnapshot(
+            assignmentsByCourseID: [
+                42: [makeCourseAssignment(id: 10, name: "Lab", dueAt: referenceDate, courseID: 42)]
+            ],
+            modulesByCourseID: [:],
+            foldersByCourseID: [:],
+            filesByFolderID: [:],
+            announcementsByCourseID: [:],
+            syllabusByCourseID: [:],
+            courseAccessedAtByCourseID: [42: referenceDate],
+            savedAt: Date(timeInterval: -86_401, since: referenceDate)
+        )
+
+        try manager.saveCache(snapshot)
+
+        #expect(manager.loadCache(validAt: referenceDate, maximumAge: 86_400) == nil)
+        #expect(!fileManager.fileExists(atPath: cacheURL.path))
+    }
+
+    @MainActor
+    @Test func canvasStoreRestoresFreshCourseDetailCacheFromDisk() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let dashboardCacheURL = makeDashboardCacheTempURL()
+        let courseDetailCacheURL = makeCourseDetailCacheTempURL()
+        let fileManager = FileManager.default
+        [configURL, dashboardCacheURL, courseDetailCacheURL].forEach { url in
+            try? fileManager.removeItem(at: url)
+        }
+        defer {
+            [configURL, dashboardCacheURL, courseDetailCacheURL].forEach { url in
+                try? fileManager.removeItem(at: url)
+            }
+        }
+
+        let referenceDate = Date(timeIntervalSince1970: 1_710_000_000)
+        let databaseManager = DatabaseManager(cacheURL: dashboardCacheURL)
+        try databaseManager.saveSnapshot(
+            CanvasSnapshot(
+                courses: [makeCourse(id: 42, name: "Biology")],
+                upcomingEvents: [],
+                missingSubmissions: [],
+                profile: nil,
+                syncedAt: referenceDate
+            )
+        )
+
+        let detailCacheManager = CourseDetailCacheManager(cacheURL: courseDetailCacheURL)
+        try detailCacheManager.saveCache(
+            CourseDetailCacheSnapshot(
+                assignmentsByCourseID: [
+                    42: [makeCourseAssignment(id: 10, name: "Lab", dueAt: referenceDate, courseID: 42)]
+                ],
+                modulesByCourseID: [:],
+                foldersByCourseID: [:],
+                filesByFolderID: [:],
+                announcementsByCourseID: [:],
+                syllabusByCourseID: [:],
+                courseAccessedAtByCourseID: [42: referenceDate],
+                savedAt: referenceDate
+            )
+        )
+
+        let store = CanvasStore(
+            configManager: CanvasConfigManager(configURL: configURL, tokenStore: InMemoryCanvasTokenStore()),
+            databaseManager: databaseManager,
+            networkManager: .shared,
+            detailCacheManager: detailCacheManager,
+            cachePolicy: CanvasCachePolicy(
+                memoryTimeToLive: 30 * 60,
+                diskTimeToLive: 24 * 60 * 60,
+                maintenanceInterval: 60 * 60,
+                maximumMemoryCourses: 5
+            ),
+            now: { referenceDate }
+        )
+
+        #expect(store.hasLoadedAssignments(for: 42))
+        #expect(store.assignments(for: 42).map(\.name) == ["Lab"])
+    }
+
+    @MainActor
+    @Test func canvasStoreCacheHitDoesNotRefreshDiskExpiration() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let dashboardCacheURL = makeDashboardCacheTempURL()
+        let courseDetailCacheURL = makeCourseDetailCacheTempURL()
+        let fileManager = FileManager.default
+        [configURL, dashboardCacheURL, courseDetailCacheURL].forEach { url in
+            try? fileManager.removeItem(at: url)
+        }
+        defer {
+            [configURL, dashboardCacheURL, courseDetailCacheURL].forEach { url in
+                try? fileManager.removeItem(at: url)
+            }
+        }
+
+        let savedAt = Date(timeIntervalSince1970: 1_710_000_000)
+        let laterDate = Date(timeInterval: 600, since: savedAt)
+        let databaseManager = DatabaseManager(cacheURL: dashboardCacheURL)
+        try databaseManager.saveSnapshot(
+            CanvasSnapshot(
+                courses: [makeCourse(id: 42, name: "Biology")],
+                upcomingEvents: [],
+                missingSubmissions: [],
+                profile: nil,
+                syncedAt: savedAt
+            )
+        )
+
+        let detailCacheManager = CourseDetailCacheManager(cacheURL: courseDetailCacheURL)
+        try detailCacheManager.saveCache(
+            CourseDetailCacheSnapshot(
+                assignmentsByCourseID: [
+                    42: [makeCourseAssignment(id: 10, name: "Lab", dueAt: savedAt, courseID: 42)]
+                ],
+                modulesByCourseID: [:],
+                foldersByCourseID: [:],
+                filesByFolderID: [:],
+                announcementsByCourseID: [:],
+                syllabusByCourseID: [:],
+                courseAccessedAtByCourseID: [42: savedAt],
+                savedAt: savedAt
+            )
+        )
+
+        let store = CanvasStore(
+            configManager: CanvasConfigManager(configURL: configURL, tokenStore: InMemoryCanvasTokenStore()),
+            databaseManager: databaseManager,
+            networkManager: .shared,
+            detailCacheManager: detailCacheManager,
+            cachePolicy: CanvasCachePolicy(
+                memoryTimeToLive: 30 * 60,
+                diskTimeToLive: 24 * 60 * 60,
+                maintenanceInterval: 60 * 60,
+                maximumMemoryCourses: 5
+            ),
+            now: { laterDate }
+        )
+
+        await store.loadAssignmentsIfNeeded(for: 42)
+        let reloadedSnapshot = try #require(detailCacheManager.loadCache(validAt: laterDate, maximumAge: 24 * 60 * 60))
+
+        #expect(reloadedSnapshot.savedAt == savedAt)
+    }
+
+    @MainActor
+    @Test func canvasStorePrunesExpiredInMemoryCourseDetails() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let dashboardCacheURL = makeDashboardCacheTempURL()
+        let courseDetailCacheURL = makeCourseDetailCacheTempURL()
+        let fileManager = FileManager.default
+        [configURL, dashboardCacheURL, courseDetailCacheURL].forEach { url in
+            try? fileManager.removeItem(at: url)
+        }
+        defer {
+            [configURL, dashboardCacheURL, courseDetailCacheURL].forEach { url in
+                try? fileManager.removeItem(at: url)
+            }
+        }
+
+        var currentDate = Date(timeIntervalSince1970: 1_710_000_000)
+        let databaseManager = DatabaseManager(cacheURL: dashboardCacheURL)
+        try databaseManager.saveSnapshot(
+            CanvasSnapshot(
+                courses: [
+                    makeCourse(id: 1, name: "Selected"),
+                    makeCourse(id: 2, name: "Stale")
+                ],
+                upcomingEvents: [],
+                missingSubmissions: [],
+                profile: nil,
+                syncedAt: currentDate
+            )
+        )
+
+        let detailCacheManager = CourseDetailCacheManager(cacheURL: courseDetailCacheURL)
+        try detailCacheManager.saveCache(
+            CourseDetailCacheSnapshot(
+                assignmentsByCourseID: [
+                    1: [makeCourseAssignment(id: 1, name: "Selected Lab", dueAt: currentDate, courseID: 1)],
+                    2: [makeCourseAssignment(id: 2, name: "Stale Lab", dueAt: currentDate, courseID: 2)]
+                ],
+                modulesByCourseID: [:],
+                foldersByCourseID: [:],
+                filesByFolderID: [:],
+                announcementsByCourseID: [:],
+                syllabusByCourseID: [:],
+                courseAccessedAtByCourseID: [
+                    1: currentDate,
+                    2: currentDate
+                ],
+                savedAt: currentDate
+            )
+        )
+
+        let store = CanvasStore(
+            configManager: CanvasConfigManager(configURL: configURL, tokenStore: InMemoryCanvasTokenStore()),
+            databaseManager: databaseManager,
+            networkManager: .shared,
+            detailCacheManager: detailCacheManager,
+            cachePolicy: CanvasCachePolicy(
+                memoryTimeToLive: 60,
+                diskTimeToLive: 24 * 60 * 60,
+                maintenanceInterval: 60 * 60,
+                maximumMemoryCourses: 5
+            ),
+            now: { currentDate }
+        )
+
+        #expect(store.hasLoadedAssignments(for: 1))
+        #expect(store.hasLoadedAssignments(for: 2))
+
+        currentDate = Date(timeInterval: 120, since: currentDate)
+        store.pruneCourseDetailMemoryCache(referenceDate: currentDate)
+
+        #expect(store.hasLoadedAssignments(for: 1))
+        #expect(!store.hasLoadedAssignments(for: 2))
+    }
+
     @Test func upcomingEventsClassifyDashboardWindow() async throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -754,6 +1218,24 @@ struct Events_TrackerTests {
         )
     }
 
+    private func makeDashboardCacheTempURL() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent(
+            "EventsTracker-\(UUID().uuidString)-dashboard-cache.json"
+        )
+    }
+
+    private func makeCourseDetailCacheTempURL() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent(
+            "EventsTracker-\(UUID().uuidString)-course-detail-cache.json"
+        )
+    }
+
+    private func makeCanvasConfigTempURL() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent(
+            "EventsTracker-\(UUID().uuidString)-canvas-config.json"
+        )
+    }
+
     private func makeTelegramReminderConfig(isEnabled: Bool = true) -> TelegramReminderConfig {
         TelegramReminderConfig(
             isEnabled: isEnabled,
@@ -765,12 +1247,60 @@ struct Events_TrackerTests {
         )
     }
 
-    private func makeCanvasConfig(telegramReminders: TelegramReminderConfig) -> CanvasConfig {
+    private func makeCanvasConfig(telegramReminders: TelegramReminderConfig = TelegramReminderConfig()) -> CanvasConfig {
         CanvasConfig(
             baseURL: "https://canvas.example.edu",
             token: "token",
             lookaheadDays: 14,
             telegramReminders: telegramReminders
+        )
+    }
+
+    private func makeCourse(id: Int, name: String) -> Course {
+        Course(
+            id: id,
+            name: name,
+            courseCode: nil,
+            workflowState: "available",
+            htmlURL: nil,
+            enrollmentTerm: nil,
+            enrollments: nil
+        )
+    }
+
+    private func makeCanvasFolder(id: Int, name: String) -> CanvasFolder {
+        CanvasFolder(
+            id: id,
+            name: name,
+            fullName: "Course Files/\(name)",
+            parentFolderID: nil,
+            filesCount: nil,
+            foldersCount: nil,
+            position: nil,
+            locked: nil,
+            hidden: nil
+        )
+    }
+
+    private func makeCanvasFile(id: Int, name: String) -> CanvasFile {
+        CanvasFile(
+            id: id,
+            uuid: nil,
+            folderID: nil,
+            displayName: name,
+            filename: name,
+            contentType: "application/pdf",
+            url: nil,
+            htmlURL: nil,
+            size: 1_024,
+            createdAt: nil,
+            updatedAt: nil,
+            unlockAt: nil,
+            locked: nil,
+            hidden: nil,
+            lockedForUser: nil,
+            hiddenForUser: nil,
+            thumbnailURL: nil
         )
     }
 
@@ -873,4 +1403,16 @@ private final class CapturingURLProtocol: URLProtocol {
     }
 
     override func stopLoading() {}
+}
+
+private final class InMemoryCanvasTokenStore: CanvasTokenStore {
+    private var tokens: [CanvasTokenKind: String] = [:]
+
+    func token(for kind: CanvasTokenKind) throws -> String? {
+        tokens[kind]
+    }
+
+    func setToken(_ token: String?, for kind: CanvasTokenKind) throws {
+        tokens[kind] = token
+    }
 }

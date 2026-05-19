@@ -445,3 +445,113 @@ struct CourseAssignmentRow: View {
         .padding(.vertical, 8)
     }
 }
+
+struct AssignmentDetailView: View {
+    let assignment: CourseAssignment
+    let courseName: String?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(assignment.name)
+                            .font(.largeTitle.weight(.semibold))
+
+                        if let courseName {
+                            Text(courseName)
+                                .font(.headline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Spacer()
+
+                    PillBadge(text: assignment.status.rawValue, tint: assignment.status.tint)
+                }
+
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 12) {
+                    AssignmentDetailMetric(title: "Due", value: DisplayFormatters.formatted(date: assignment.dueAt), systemImage: "clock")
+                    AssignmentDetailMetric(title: "Points", value: assignment.pointsDescription.map { "\($0) pts" } ?? "No points", systemImage: "number")
+                    AssignmentDetailMetric(title: "Score", value: assignment.scoreDescription ?? "Not scored", systemImage: "checkmark.seal")
+                    AssignmentDetailMetric(title: "Grade", value: assignment.gradeDescription ?? "Not graded", systemImage: "graduationcap")
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Submission")
+                        .font(.title2.weight(.semibold))
+
+                    AssignmentDetailInfoRow(title: "State", value: assignment.submission?.workflowState ?? assignment.status.rawValue)
+                    AssignmentDetailInfoRow(title: "Submitted", value: DisplayFormatters.relativeString(date: assignment.submission?.submittedAt) ?? DisplayFormatters.formatted(date: assignment.submission?.submittedAt))
+                    AssignmentDetailInfoRow(title: "Graded", value: DisplayFormatters.relativeString(date: assignment.submission?.gradedAt) ?? DisplayFormatters.formatted(date: assignment.submission?.gradedAt))
+                    AssignmentDetailInfoRow(title: "Type", value: assignment.submission?.submissionType ?? assignment.submissionTypes?.joined(separator: ", ") ?? "Not specified")
+                    AssignmentDetailInfoRow(title: "Attempt", value: assignment.submission?.attempt.map(String.init) ?? "No attempt recorded")
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Availability")
+                        .font(.title2.weight(.semibold))
+
+                    AssignmentDetailInfoRow(title: "Unlocks", value: DisplayFormatters.formatted(date: assignment.unlockAt))
+                    AssignmentDetailInfoRow(title: "Locks", value: DisplayFormatters.formatted(date: assignment.lockAt))
+                    AssignmentDetailInfoRow(title: "Published", value: assignment.published == false ? "No" : "Yes")
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Details")
+                        .font(.title2.weight(.semibold))
+
+                    Text(assignment.summaryText ?? "No assignment description available.")
+                        .foregroundStyle(assignment.summaryText == nil ? .secondary : .primary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if let htmlURL = assignment.htmlURL {
+                    Link("Open in Canvas", destination: htmlURL)
+                        .font(.headline)
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: 720, alignment: .leading)
+        }
+    }
+}
+
+private struct AssignmentDetailMetric: View {
+    let title: String
+    let value: String
+    let systemImage: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(title, systemImage: systemImage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Text(value)
+                .font(.headline)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color.primary.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct AssignmentDetailInfoRow: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title)
+                .foregroundStyle(.secondary)
+                .frame(width: 110, alignment: .leading)
+
+            Text(value)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .font(.subheadline)
+    }
+}

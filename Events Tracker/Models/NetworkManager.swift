@@ -40,7 +40,7 @@ final class NetworkManager {
     private let session: URLSession
     private let decoder: JSONDecoder
 
-    private init(session: URLSession = .shared) {
+    init(session: URLSession = .shared) {
         self.session = session
 
         decoder = JSONDecoder()
@@ -160,6 +160,30 @@ final class NetworkManager {
         )
 
         return files.sorted(by: Self.sortFiles)
+    }
+
+    func fetchAnnouncements(courseID: Int, using config: CanvasConfig) async throws -> [CourseAnnouncement] {
+        let announcements: [CourseAnnouncement] = try await requestPaginatedArray(
+            path: "/api/v1/announcements",
+            queryItems: [
+                URLQueryItem(name: "context_codes[]", value: "course_\(courseID)"),
+                URLQueryItem(name: "per_page", value: "100")
+            ],
+            config: config
+        )
+
+        return announcements.sorted(by: Self.sortAnnouncements)
+    }
+
+    func fetchSyllabus(courseID: Int, using config: CanvasConfig) async throws -> CourseSyllabus {
+        try await request(
+            path: "/api/v1/courses/\(courseID)",
+            queryItems: [
+                URLQueryItem(name: "include[]", value: "syllabus_body")
+            ],
+            config: config,
+            responseType: CourseSyllabus.self
+        )
     }
 
     func fetchUpcomingEvents(using config: CanvasConfig) async throws -> [UpcomingEvent] {
@@ -400,6 +424,23 @@ final class NetworkManager {
         }
 
         return lhs.id < rhs.id
+    }
+
+    private static func sortAnnouncements(_ lhs: CourseAnnouncement, _ rhs: CourseAnnouncement) -> Bool {
+        switch (lhs.displayDate, rhs.displayDate) {
+        case let (left?, right?):
+            if left != right {
+                return left > right
+            }
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        case (.none, .none):
+            break
+        }
+
+        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
     }
 
     private static func sortAssignments(_ lhs: CourseAssignment, _ rhs: CourseAssignment) -> Bool {

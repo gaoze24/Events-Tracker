@@ -54,7 +54,7 @@ The script writes `dist/Events Tracker.app`. Set `CONFIGURATION=Release` if you 
 ## Security Notes
 
 - Do **not** commit real Canvas tokens.
-- The app stores Canvas configuration locally in Application Support on the current Mac.
+- The app stores non-sensitive Canvas configuration in Application Support and secrets in the macOS Keychain.
 - Keep README examples and screenshots free of personal course data.
 
 ## Current Direction

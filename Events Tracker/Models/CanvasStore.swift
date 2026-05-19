@@ -20,6 +20,10 @@ final class CanvasStore: ObservableObject {
     @Published private(set) var courseFilesByFolderID: [Int: [CanvasFile]]
     @Published private(set) var loadingCourseFolderIDs: Set<Int>
     @Published private(set) var loadingFolderFileIDs: Set<Int>
+    @Published private(set) var courseAnnouncementsByCourseID: [Int: [CourseAnnouncement]]
+    @Published private(set) var loadingCourseAnnouncementIDs: Set<Int>
+    @Published private(set) var courseSyllabusByCourseID: [Int: CourseSyllabus]
+    @Published private(set) var loadingCourseSyllabusIDs: Set<Int>
     @Published private(set) var upcomingEvents: [UpcomingEvent]
     @Published private(set) var missingSubmissions: [MissingSubmission]
     @Published private(set) var profile: UserProfile?
@@ -31,17 +35,29 @@ final class CanvasStore: ObservableObject {
     private let configManager: CanvasConfigManager
     private let databaseManager: DatabaseManager
     private let networkManager: NetworkManager
+    private let detailCacheManager: CourseDetailCacheManager
+    private let cachePolicy: CanvasCachePolicy
     private let reminderService: AssignmentReminderService
     private let relativeFormatter = RelativeDateTimeFormatter()
+    private let now: () -> Date
+    private var courseDetailAccessDates: [Int: Date]
+    private var cacheMaintenanceTask: Task<Void, Never>?
 
     init(
         configManager: CanvasConfigManager = .shared,
         databaseManager: DatabaseManager = .shared,
-        networkManager: NetworkManager = .shared
+        networkManager: NetworkManager = .shared,
+        detailCacheManager: CourseDetailCacheManager = .shared,
+        cachePolicy: CanvasCachePolicy = .default,
+        now: @escaping () -> Date = Date.init
     ) {
         self.configManager = configManager
         self.databaseManager = databaseManager
         self.networkManager = networkManager
+        self.detailCacheManager = detailCacheManager
+        self.cachePolicy = cachePolicy
+        self.now = now
+        courseDetailAccessDates = [:]
 
         let savedConfig = configManager.loadConfig()
         config = savedConfig
@@ -62,6 +78,10 @@ final class CanvasStore: ObservableObject {
             courseFilesByFolderID = [:]
             loadingCourseFolderIDs = []
             loadingFolderFileIDs = []
+            courseAnnouncementsByCourseID = [:]
+            loadingCourseAnnouncementIDs = []
+            courseSyllabusByCourseID = [:]
+            loadingCourseSyllabusIDs = []
             upcomingEvents = snapshot.upcomingEvents
             missingSubmissions = snapshot.missingSubmissions
             profile = snapshot.profile
@@ -76,6 +96,10 @@ final class CanvasStore: ObservableObject {
             courseFilesByFolderID = [:]
             loadingCourseFolderIDs = []
             loadingFolderFileIDs = []
+            courseAnnouncementsByCourseID = [:]
+            loadingCourseAnnouncementIDs = []
+            courseSyllabusByCourseID = [:]
+            loadingCourseSyllabusIDs = []
             upcomingEvents = []
             missingSubmissions = []
             profile = nil
@@ -84,6 +108,11 @@ final class CanvasStore: ObservableObject {
 
         selectedCourseID = courses.first?.id
         relativeFormatter.unitsStyle = .full
+        restoreCourseDetailCache()
+    }
+
+    deinit {
+        cacheMaintenanceTask?.cancel()
     }
 
     var isConfigured: Bool {
@@ -159,14 +188,8 @@ final class CanvasStore: ObservableObject {
         do {
             let snapshot = try await networkManager.fetchDashboardSnapshot(using: config)
             applySnapshot(snapshot)
-            courseAssignmentsByCourseID = [:]
-            loadingCourseAssignmentIDs = []
-            courseModulesByCourseID = [:]
-            loadingCourseModuleIDs = []
-            courseFoldersByCourseID = [:]
-            courseFilesByFolderID = [:]
-            loadingCourseFolderIDs = []
-            loadingFolderFileIDs = []
+            clearCourseDetailMemoryCache()
+            try? detailCacheManager.clearCache()
             try databaseManager.saveSnapshot(snapshot)
         } catch {
             errorMessage = error.localizedDescription
@@ -206,14 +229,7 @@ final class CanvasStore: ObservableObject {
 
     func clearLocalData() {
         courses = []
-        courseAssignmentsByCourseID = [:]
-        loadingCourseAssignmentIDs = []
-        courseModulesByCourseID = [:]
-        loadingCourseModuleIDs = []
-        courseFoldersByCourseID = [:]
-        courseFilesByFolderID = [:]
-        loadingCourseFolderIDs = []
-        loadingFolderFileIDs = []
+        clearCourseDetailMemoryCache()
         upcomingEvents = []
         missingSubmissions = []
         profile = nil
@@ -222,6 +238,7 @@ final class CanvasStore: ObservableObject {
 
         do {
             try databaseManager.clearSnapshot()
+            try detailCacheManager.clearCache()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -283,6 +300,22 @@ final class CanvasStore: ObservableObject {
         return courseFilesByFolderID[folderID] ?? []
     }
 
+    func announcements(for courseID: Int?) -> [CourseAnnouncement] {
+        guard let courseID else {
+            return []
+        }
+
+        return courseAnnouncementsByCourseID[courseID] ?? []
+    }
+
+    func syllabus(for courseID: Int?) -> CourseSyllabus? {
+        guard let courseID else {
+            return nil
+        }
+
+        return courseSyllabusByCourseID[courseID]
+    }
+
     func hasLoadedAssignments(for courseID: Int?) -> Bool {
         guard let courseID else {
             return false
@@ -300,11 +333,16 @@ final class CanvasStore: ObservableObject {
     }
 
     func loadAssignmentsIfNeeded(for courseID: Int?) async {
-        guard
-            let courseID,
-            courseAssignmentsByCourseID[courseID] == nil,
-            !loadingCourseAssignmentIDs.contains(courseID)
-        else {
+        guard let courseID else {
+            return
+        }
+
+        if courseAssignmentsByCourseID[courseID] != nil {
+            markCourseDetailAccess(courseID)
+            return
+        }
+
+        guard !loadingCourseAssignmentIDs.contains(courseID) else {
             return
         }
 
@@ -322,6 +360,8 @@ final class CanvasStore: ObservableObject {
         do {
             let assignments = try await networkManager.fetchAssignments(courseID: courseID, using: config)
             courseAssignmentsByCourseID[courseID] = assignments
+            markCourseDetailAccess(courseID)
+            persistCourseDetailCache()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -346,11 +386,16 @@ final class CanvasStore: ObservableObject {
     }
 
     func loadModulesIfNeeded(for courseID: Int?) async {
-        guard
-            let courseID,
-            courseModulesByCourseID[courseID] == nil,
-            !loadingCourseModuleIDs.contains(courseID)
-        else {
+        guard let courseID else {
+            return
+        }
+
+        if courseModulesByCourseID[courseID] != nil {
+            markCourseDetailAccess(courseID)
+            return
+        }
+
+        guard !loadingCourseModuleIDs.contains(courseID) else {
             return
         }
 
@@ -368,6 +413,8 @@ final class CanvasStore: ObservableObject {
         do {
             let modules = try await networkManager.fetchModules(courseID: courseID, using: config)
             courseModulesByCourseID[courseID] = modules
+            markCourseDetailAccess(courseID)
+            persistCourseDetailCache()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -407,12 +454,49 @@ final class CanvasStore: ObservableObject {
         return loadingFolderFileIDs.contains(folderID)
     }
 
+    func hasLoadedAnnouncements(for courseID: Int?) -> Bool {
+        guard let courseID else {
+            return false
+        }
+
+        return courseAnnouncementsByCourseID[courseID] != nil
+    }
+
+    func isLoadingAnnouncements(for courseID: Int?) -> Bool {
+        guard let courseID else {
+            return false
+        }
+
+        return loadingCourseAnnouncementIDs.contains(courseID)
+    }
+
+    func hasLoadedSyllabus(for courseID: Int?) -> Bool {
+        guard let courseID else {
+            return false
+        }
+
+        return courseSyllabusByCourseID[courseID] != nil
+    }
+
+    func isLoadingSyllabus(for courseID: Int?) -> Bool {
+        guard let courseID else {
+            return false
+        }
+
+        return loadingCourseSyllabusIDs.contains(courseID)
+    }
+
     func loadCourseFilesIfNeeded(for courseID: Int?) async {
-        guard
-            let courseID,
-            courseFoldersByCourseID[courseID] == nil,
-            !loadingCourseFolderIDs.contains(courseID)
-        else {
+        guard let courseID else {
+            return
+        }
+
+        if courseFoldersByCourseID[courseID] != nil {
+            markCourseDetailAccess(courseID)
+            return
+        }
+
+        guard !loadingCourseFolderIDs.contains(courseID) else {
             return
         }
 
@@ -430,6 +514,8 @@ final class CanvasStore: ObservableObject {
         do {
             let folders = try await networkManager.fetchFolders(courseID: courseID, using: config)
             courseFoldersByCourseID[courseID] = folders
+            markCourseDetailAccess(courseID)
+            persistCourseDetailCache()
 
             if let firstFolderID = folders.first?.id, courseFilesByFolderID[firstFolderID] == nil {
                 await loadFiles(for: firstFolderID)
@@ -442,11 +528,18 @@ final class CanvasStore: ObservableObject {
     }
 
     func loadFilesIfNeeded(for folderID: Int?) async {
-        guard
-            let folderID,
-            courseFilesByFolderID[folderID] == nil,
-            !loadingFolderFileIDs.contains(folderID)
-        else {
+        guard let folderID else {
+            return
+        }
+
+        if courseFilesByFolderID[folderID] != nil {
+            if let courseID = courseID(containingFolderID: folderID) {
+                markCourseDetailAccess(courseID)
+            }
+            return
+        }
+
+        guard !loadingFolderFileIDs.contains(folderID) else {
             return
         }
 
@@ -464,11 +557,89 @@ final class CanvasStore: ObservableObject {
         do {
             let files = try await networkManager.fetchFiles(folderID: folderID, using: config)
             courseFilesByFolderID[folderID] = files
+            if let courseID = courseID(containingFolderID: folderID) {
+                markCourseDetailAccess(courseID)
+                persistCourseDetailCache()
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
 
         loadingFolderFileIDs.remove(folderID)
+    }
+
+    func loadAnnouncementsIfNeeded(for courseID: Int?) async {
+        guard let courseID else {
+            return
+        }
+
+        if courseAnnouncementsByCourseID[courseID] != nil {
+            markCourseDetailAccess(courseID)
+            return
+        }
+
+        guard !loadingCourseAnnouncementIDs.contains(courseID) else {
+            return
+        }
+
+        await loadAnnouncements(for: courseID)
+    }
+
+    func loadAnnouncements(for courseID: Int) async {
+        guard config.isComplete else {
+            errorMessage = CanvasServiceError.incompleteConfiguration.localizedDescription
+            return
+        }
+
+        loadingCourseAnnouncementIDs.insert(courseID)
+
+        do {
+            let announcements = try await networkManager.fetchAnnouncements(courseID: courseID, using: config)
+            courseAnnouncementsByCourseID[courseID] = announcements
+            markCourseDetailAccess(courseID)
+            persistCourseDetailCache()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        loadingCourseAnnouncementIDs.remove(courseID)
+    }
+
+    func loadSyllabusIfNeeded(for courseID: Int?) async {
+        guard let courseID else {
+            return
+        }
+
+        if courseSyllabusByCourseID[courseID] != nil {
+            markCourseDetailAccess(courseID)
+            return
+        }
+
+        guard !loadingCourseSyllabusIDs.contains(courseID) else {
+            return
+        }
+
+        await loadSyllabus(for: courseID)
+    }
+
+    func loadSyllabus(for courseID: Int) async {
+        guard config.isComplete else {
+            errorMessage = CanvasServiceError.incompleteConfiguration.localizedDescription
+            return
+        }
+
+        loadingCourseSyllabusIDs.insert(courseID)
+
+        do {
+            let syllabus = try await networkManager.fetchSyllabus(courseID: courseID, using: config)
+            courseSyllabusByCourseID[courseID] = syllabus
+            markCourseDetailAccess(courseID)
+            persistCourseDetailCache()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        loadingCourseSyllabusIDs.remove(courseID)
     }
 
     func startTelegramReminderService() {
@@ -477,6 +648,48 @@ final class CanvasStore: ObservableObject {
 
     func stopTelegramReminderService() {
         reminderService.stop()
+    }
+
+    func startCacheMaintenance() {
+        guard cacheMaintenanceTask == nil else {
+            return
+        }
+
+        let interval = max(cachePolicy.maintenanceInterval, 1)
+        cacheMaintenanceTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+
+                guard !Task.isCancelled else {
+                    return
+                }
+
+                guard let self else {
+                    return
+                }
+
+                await self.pruneCourseDetailMemoryCache()
+            }
+        }
+    }
+
+    func stopCacheMaintenance() {
+        cacheMaintenanceTask?.cancel()
+        cacheMaintenanceTask = nil
+    }
+
+    func pruneCourseDetailMemoryCache(referenceDate: Date? = nil) {
+        let currentDate = referenceDate ?? now()
+        let snapshot = buildCourseDetailCacheSnapshot(savedAt: currentDate)
+        let prunedSnapshot = snapshot.prunedForMemory(
+            now: currentDate,
+            timeToLive: cachePolicy.memoryTimeToLive,
+            maximumCourses: cachePolicy.maximumMemoryCourses,
+            alwaysKeepingCourseIDs: Set([selectedCourseID].compactMap { $0 })
+        )
+
+        applyCourseDetailCache(prunedSnapshot)
+        _ = detailCacheManager.loadCache(validAt: currentDate, maximumAge: cachePolicy.diskTimeToLive)
     }
 
     func runTelegramReminderCheckNow() async {
@@ -494,6 +707,86 @@ final class CanvasStore: ObservableObject {
             chatID: chatID,
             text: "Events Tracker Telegram reminders are connected."
         )
+    }
+
+    private func restoreCourseDetailCache() {
+        let currentDate = now()
+        guard let snapshot = detailCacheManager.loadCache(validAt: currentDate, maximumAge: cachePolicy.diskTimeToLive) else {
+            return
+        }
+
+        let validCourseIDs = Set(courses.map(\.id))
+        let memorySnapshot = snapshot
+            .filteredForCourses(validCourseIDs)
+            .prunedForMemory(
+                now: currentDate,
+                timeToLive: cachePolicy.memoryTimeToLive,
+                maximumCourses: cachePolicy.maximumMemoryCourses,
+                alwaysKeepingCourseIDs: Set([selectedCourseID].compactMap { $0 })
+            )
+
+        applyCourseDetailCache(memorySnapshot)
+    }
+
+    private func buildCourseDetailCacheSnapshot(savedAt: Date) -> CourseDetailCacheSnapshot {
+        CourseDetailCacheSnapshot(
+            assignmentsByCourseID: courseAssignmentsByCourseID,
+            modulesByCourseID: courseModulesByCourseID,
+            foldersByCourseID: courseFoldersByCourseID,
+            filesByFolderID: courseFilesByFolderID,
+            announcementsByCourseID: courseAnnouncementsByCourseID,
+            syllabusByCourseID: courseSyllabusByCourseID,
+            courseAccessedAtByCourseID: courseDetailAccessDates,
+            savedAt: savedAt
+        )
+    }
+
+    private func applyCourseDetailCache(_ snapshot: CourseDetailCacheSnapshot) {
+        courseAssignmentsByCourseID = snapshot.assignmentsByCourseID
+        courseModulesByCourseID = snapshot.modulesByCourseID
+        courseFoldersByCourseID = snapshot.foldersByCourseID
+        courseFilesByFolderID = snapshot.filesByFolderID
+        courseAnnouncementsByCourseID = snapshot.announcementsByCourseID
+        courseSyllabusByCourseID = snapshot.syllabusByCourseID
+        courseDetailAccessDates = snapshot.courseAccessedAtByCourseID
+    }
+
+    private func persistCourseDetailCache() {
+        let validCourseIDs = Set(courses.map(\.id))
+        let snapshot = buildCourseDetailCacheSnapshot(savedAt: now())
+            .filteredForCourses(validCourseIDs)
+
+        do {
+            try detailCacheManager.saveCache(snapshot)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func markCourseDetailAccess(_ courseID: Int) {
+        courseDetailAccessDates[courseID] = now()
+    }
+
+    private func clearCourseDetailMemoryCache() {
+        courseAssignmentsByCourseID = [:]
+        loadingCourseAssignmentIDs = []
+        courseModulesByCourseID = [:]
+        loadingCourseModuleIDs = []
+        courseFoldersByCourseID = [:]
+        courseFilesByFolderID = [:]
+        loadingCourseFolderIDs = []
+        loadingFolderFileIDs = []
+        courseAnnouncementsByCourseID = [:]
+        loadingCourseAnnouncementIDs = []
+        courseSyllabusByCourseID = [:]
+        loadingCourseSyllabusIDs = []
+        courseDetailAccessDates = [:]
+    }
+
+    private func courseID(containingFolderID folderID: Int) -> Int? {
+        courseFoldersByCourseID.first { _, folders in
+            folders.contains { $0.id == folderID }
+        }?.key
     }
 
     private func applySnapshot(_ snapshot: CanvasSnapshot) {

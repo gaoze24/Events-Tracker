@@ -10,6 +10,8 @@ import SwiftUI
 private enum CourseWorkspaceSection: String, CaseIterable, Identifiable {
     case overview = "Overview"
     case modules = "Modules"
+    case announcements = "Announcements"
+    case syllabus = "Syllabus"
     case files = "Files"
     case assignments = "Assignments"
     case grades = "Grades"
@@ -120,6 +122,32 @@ private enum CourseGradeSort: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+private enum CourseAnnouncementFilter: String, CaseIterable, Identifiable {
+    case all = "All"
+    case unread = "Unread"
+    case locked = "Locked"
+
+    var id: String { rawValue }
+
+    func includes(_ announcement: CourseAnnouncement) -> Bool {
+        switch self {
+        case .all:
+            return true
+        case .unread:
+            return announcement.isUnread
+        case .locked:
+            return announcement.lockedForUser == true
+        }
+    }
+}
+
+private enum CourseAnnouncementSort: String, CaseIterable, Identifiable {
+    case recent = "Recent"
+    case title = "Title"
+
+    var id: String { rawValue }
+}
+
 struct CoursesView: View {
     @EnvironmentObject private var store: CanvasStore
     @State private var selectedSection: CourseWorkspaceSection = .overview
@@ -134,6 +162,9 @@ struct CoursesView: View {
     @State private var assignmentSort: CourseAssignmentSort = .dueDate
     @State private var gradeSearchQuery = ""
     @State private var gradeSort: CourseGradeSort = .recent
+    @State private var announcementSearchQuery = ""
+    @State private var announcementFilter: CourseAnnouncementFilter = .all
+    @State private var announcementSort: CourseAnnouncementSort = .recent
 
     private var selectedCourseBinding: Binding<Int?> {
         Binding(
@@ -154,6 +185,14 @@ struct CoursesView: View {
         store.folders(for: store.selectedCourseID)
     }
 
+    private var selectedCourseAnnouncements: [CourseAnnouncement] {
+        store.announcements(for: store.selectedCourseID)
+    }
+
+    private var selectedCourseSyllabus: CourseSyllabus? {
+        store.syllabus(for: store.selectedCourseID)
+    }
+
     private var isLoadingSelectedCourseModules: Bool {
         store.isLoadingModules(for: store.selectedCourseID)
     }
@@ -166,6 +205,14 @@ struct CoursesView: View {
         store.isLoadingFolders(for: store.selectedCourseID)
     }
 
+    private var isLoadingSelectedCourseAnnouncements: Bool {
+        store.isLoadingAnnouncements(for: store.selectedCourseID)
+    }
+
+    private var isLoadingSelectedCourseSyllabus: Bool {
+        store.isLoadingSyllabus(for: store.selectedCourseID)
+    }
+
     private var hasLoadedSelectedCourseModules: Bool {
         store.hasLoadedModules(for: store.selectedCourseID)
     }
@@ -176,6 +223,14 @@ struct CoursesView: View {
 
     private var hasLoadedSelectedCourseFolders: Bool {
         store.hasLoadedFolders(for: store.selectedCourseID)
+    }
+
+    private var hasLoadedSelectedCourseAnnouncements: Bool {
+        store.hasLoadedAnnouncements(for: store.selectedCourseID)
+    }
+
+    private var hasLoadedSelectedCourseSyllabus: Bool {
+        store.hasLoadedSyllabus(for: store.selectedCourseID)
     }
 
     private var selectedCourseUpcomingItems: [UpcomingEvent] {
@@ -245,7 +300,7 @@ struct CoursesView: View {
                                 }
                             }
                             .pickerStyle(.segmented)
-                            .frame(maxWidth: 460)
+                            .frame(maxWidth: 760)
 
                             switch selectedSection {
                             case .overview:
@@ -257,6 +312,10 @@ struct CoursesView: View {
                                     modules: selectedCourseModules,
                                     hasLoadedFolders: hasLoadedSelectedCourseFolders,
                                     folders: selectedCourseFolders,
+                                    hasLoadedAnnouncements: hasLoadedSelectedCourseAnnouncements,
+                                    announcements: selectedCourseAnnouncements,
+                                    hasLoadedSyllabus: hasLoadedSelectedCourseSyllabus,
+                                    syllabus: selectedCourseSyllabus,
                                     upcomingItems: selectedCourseUpcomingItems,
                                     missingItems: selectedCourseMissingItems
                                 )
@@ -268,6 +327,21 @@ struct CoursesView: View {
                                     searchQuery: $moduleSearchQuery,
                                     filter: $moduleFilter,
                                     sort: $moduleSort
+                                )
+                            case .announcements:
+                                CourseAnnouncementsContent(
+                                    course: selectedCourse,
+                                    announcements: selectedCourseAnnouncements,
+                                    isLoading: isLoadingSelectedCourseAnnouncements,
+                                    searchQuery: $announcementSearchQuery,
+                                    filter: $announcementFilter,
+                                    sort: $announcementSort
+                                )
+                            case .syllabus:
+                                CourseSyllabusContent(
+                                    course: selectedCourse,
+                                    syllabus: selectedCourseSyllabus,
+                                    isLoading: isLoadingSelectedCourseSyllabus
                                 )
                             case .files:
                                 CourseFilesContent(
@@ -303,6 +377,10 @@ struct CoursesView: View {
                         switch selectedSection {
                         case .modules:
                             await store.loadModulesIfNeeded(for: selectedCourse.id)
+                        case .announcements:
+                            await store.loadAnnouncementsIfNeeded(for: selectedCourse.id)
+                        case .syllabus:
+                            await store.loadSyllabusIfNeeded(for: selectedCourse.id)
                         case .files:
                             await store.loadCourseFilesIfNeeded(for: selectedCourse.id)
                         case .assignments, .grades:
@@ -330,6 +408,10 @@ private struct CourseOverviewContent: View {
     let modules: [CourseModule]
     let hasLoadedFolders: Bool
     let folders: [CanvasFolder]
+    let hasLoadedAnnouncements: Bool
+    let announcements: [CourseAnnouncement]
+    let hasLoadedSyllabus: Bool
+    let syllabus: CourseSyllabus?
     let upcomingItems: [UpcomingEvent]
     let missingItems: [MissingSubmission]
 
@@ -424,6 +506,22 @@ private struct CourseOverviewContent: View {
                 detail: hasLoadedFolders ? "Canvas folders available in this course." : "Open the Files tab to browse course materials.",
                 systemImage: "folder",
                 tint: .purple
+            )
+
+            SummaryCard(
+                title: "Announcements",
+                value: hasLoadedAnnouncements ? "\(announcements.count)" : "Load",
+                detail: hasLoadedAnnouncements ? "Recent Canvas announcements available." : "Open Announcements to load course updates.",
+                systemImage: "megaphone",
+                tint: .indigo
+            )
+
+            SummaryCard(
+                title: "Syllabus",
+                value: hasLoadedSyllabus ? (syllabus?.hasContent == true ? "Ready" : "Empty") : "Load",
+                detail: hasLoadedSyllabus ? "Course syllabus has been checked." : "Open Syllabus to load course policies.",
+                systemImage: "doc.richtext",
+                tint: .cyan
             )
 
             SummaryCard(
@@ -664,6 +762,248 @@ private struct CourseModulesContent: View {
         }
 
         return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+    }
+}
+
+private struct CourseAnnouncementsContent: View {
+    @EnvironmentObject private var store: CanvasStore
+
+    let course: Course
+    let announcements: [CourseAnnouncement]
+    let isLoading: Bool
+    @Binding var searchQuery: String
+    @Binding var filter: CourseAnnouncementFilter
+    @Binding var sort: CourseAnnouncementSort
+
+    private let summaryColumns = [
+        GridItem(.flexible(), spacing: 12),
+        GridItem(.flexible(), spacing: 12),
+        GridItem(.flexible(), spacing: 12)
+    ]
+
+    private var visibleAnnouncements: [CourseAnnouncement] {
+        let filteredAnnouncements = announcements
+            .filter { filter.includes($0) }
+            .filter { $0.matchesSearch(searchQuery) }
+
+        switch sort {
+        case .recent:
+            return filteredAnnouncements.sorted(by: sortByRecent)
+        case .title:
+            return filteredAnnouncements.sorted {
+                $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+            }
+        }
+    }
+
+    private var unreadCount: Int {
+        announcements.filter(\.isUnread).count
+    }
+
+    private var lockedCount: Int {
+        announcements.filter { $0.lockedForUser == true }.count
+    }
+
+    var body: some View {
+        HStack {
+            Text("Announcements")
+                .font(.title2.weight(.semibold))
+
+            Spacer()
+
+            Button("Refresh Announcements") {
+                Task {
+                    await store.loadAnnouncements(for: course.id)
+                }
+            }
+            .disabled(isLoading)
+        }
+
+        LazyVGrid(columns: summaryColumns, spacing: 12) {
+            SummaryCard(
+                title: "Total",
+                value: "\(announcements.count)",
+                detail: "Announcements Canvas returned for this course.",
+                systemImage: "megaphone",
+                tint: .indigo
+            )
+
+            SummaryCard(
+                title: "Unread",
+                value: "\(unreadCount)",
+                detail: "Announcements Canvas marks as unread.",
+                systemImage: "circle.fill",
+                tint: .blue
+            )
+
+            SummaryCard(
+                title: "Restricted",
+                value: "\(lockedCount)",
+                detail: "Announcements locked for the current user.",
+                systemImage: "lock",
+                tint: .orange
+            )
+        }
+
+        CourseWorkspaceControls(
+            searchPrompt: "Search announcements",
+            searchQuery: $searchQuery,
+            filter: $filter,
+            sort: $sort,
+            shownCount: visibleAnnouncements.count,
+            totalCount: announcements.count
+        )
+
+        if isLoading && announcements.isEmpty {
+            ProgressView("Loading announcements...")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 24)
+        } else if announcements.isEmpty {
+            SetupPromptView(
+                title: "No Announcements Yet",
+                message: "Canvas has not returned announcements for this course."
+            )
+        } else if visibleAnnouncements.isEmpty {
+            SetupPromptView(
+                title: "No Matching Announcements",
+                message: "Change the search, filter, or sort controls to review more announcements."
+            )
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(visibleAnnouncements) { announcement in
+                    CourseAnnouncementRow(announcement: announcement)
+
+                    if announcement.id != visibleAnnouncements.last?.id {
+                        Divider()
+                    }
+                }
+            }
+        }
+    }
+
+    private func sortByRecent(_ lhs: CourseAnnouncement, _ rhs: CourseAnnouncement) -> Bool {
+        switch (lhs.displayDate, rhs.displayDate) {
+        case let (left?, right?):
+            if left != right {
+                return left > right
+            }
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        case (.none, .none):
+            break
+        }
+
+        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+    }
+}
+
+private struct CourseAnnouncementRow: View {
+    let announcement: CourseAnnouncement
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(announcement.title)
+                        .font(.headline)
+
+                    if let summaryText = announcement.summaryText {
+                        Text(summaryText)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+
+                Spacer()
+
+                if announcement.isUnread {
+                    PillBadge(text: "Unread", tint: .blue)
+                }
+
+                if announcement.lockedForUser == true {
+                    PillBadge(text: "Restricted", tint: .orange)
+                }
+            }
+
+            HStack(spacing: 12) {
+                Label(
+                    DisplayFormatters.formatted(date: announcement.displayDate),
+                    systemImage: "clock"
+                )
+
+                if let relative = DisplayFormatters.relativeString(date: announcement.displayDate) {
+                    Text(relative)
+                }
+
+                Spacer()
+
+                if let htmlURL = announcement.htmlURL {
+                    Link("Open in Canvas", destination: htmlURL)
+                        .font(.caption.weight(.semibold))
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 10)
+    }
+}
+
+private struct CourseSyllabusContent: View {
+    @EnvironmentObject private var store: CanvasStore
+
+    let course: Course
+    let syllabus: CourseSyllabus?
+    let isLoading: Bool
+
+    var body: some View {
+        HStack {
+            Text("Syllabus")
+                .font(.title2.weight(.semibold))
+
+            Spacer()
+
+            Button("Refresh Syllabus") {
+                Task {
+                    await store.loadSyllabus(for: course.id)
+                }
+            }
+            .disabled(isLoading)
+        }
+
+        if isLoading && syllabus == nil {
+            ProgressView("Loading syllabus...")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 24)
+        } else if let syllabus, let summaryText = syllabus.summaryText {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Label(syllabus.name, systemImage: "doc.richtext")
+                        .font(.headline)
+
+                    Spacer()
+
+                    if let htmlURL = syllabus.htmlURL {
+                        Link("Open in Canvas", destination: htmlURL)
+                    }
+                }
+
+                Text(summaryText)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(16)
+            .background(Color.primary.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        } else {
+            SetupPromptView(
+                title: "No Syllabus Yet",
+                message: "Canvas did not return a visible syllabus body for this course."
+            )
+        }
     }
 }
 
@@ -1044,6 +1384,8 @@ private struct CourseAssignmentsContent: View {
     @Binding var filter: CourseAssignmentFilter
     @Binding var sort: CourseAssignmentSort
 
+    @State private var selectedAssignment: CourseAssignment?
+
     private let summaryColumns = [
         GridItem(.flexible(), spacing: 12),
         GridItem(.flexible(), spacing: 12)
@@ -1093,86 +1435,95 @@ private struct CourseAssignmentsContent: View {
     }
 
     var body: some View {
-        HStack {
-            Text("Assignments")
-                .font(.title2.weight(.semibold))
+        Group {
+            HStack {
+                Text("Assignments")
+                    .font(.title2.weight(.semibold))
 
-            Spacer()
+                Spacer()
 
-            Button("Refresh Assignments") {
-                Task {
-                    await store.loadAssignments(for: course.id)
-                }
-            }
-        }
-
-        LazyVGrid(columns: summaryColumns, spacing: 12) {
-            SummaryCard(
-                title: "All Work",
-                value: "\(assignments.count)",
-                detail: "Assignments currently published in this course.",
-                systemImage: "doc.text",
-                tint: .blue
-            )
-
-            SummaryCard(
-                title: "Upcoming",
-                value: "\(upcomingCount)",
-                detail: "Assignments still open and not yet submitted.",
-                systemImage: "calendar",
-                tint: .orange
-            )
-
-            SummaryCard(
-                title: "Missing",
-                value: "\(missingCount)",
-                detail: "Items that Canvas marks as overdue or late.",
-                systemImage: "exclamationmark.circle",
-                tint: .red
-            )
-
-            SummaryCard(
-                title: "Completed",
-                value: "\(completedCount)",
-                detail: "Submitted, graded, or excused work.",
-                systemImage: "checkmark.circle",
-                tint: .green
-            )
-        }
-
-        CourseWorkspaceControls(
-            searchPrompt: "Search assignments",
-            searchQuery: $searchQuery,
-            filter: $filter,
-            sort: $sort,
-            shownCount: filteredAssignments.count,
-            totalCount: assignments.count
-        )
-
-        if isLoading && assignments.isEmpty {
-            ProgressView("Loading assignments...")
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 24)
-        } else if assignments.isEmpty {
-            SetupPromptView(
-                title: "No Assignments Yet",
-                message: "Canvas has not returned any assignments for this course."
-            )
-        } else if filteredAssignments.isEmpty {
-            SetupPromptView(
-                title: "No Matching Work",
-                message: "Change the search, filter, or sort controls to review a different slice of this course."
-            )
-        } else {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(filteredAssignments) { assignment in
-                    CourseAssignmentRow(assignment: assignment, courseName: course.name)
-
-                    if assignment.id != filteredAssignments.last?.id {
-                        Divider()
+                Button("Refresh Assignments") {
+                    Task {
+                        await store.loadAssignments(for: course.id)
                     }
                 }
             }
+
+            LazyVGrid(columns: summaryColumns, spacing: 12) {
+                SummaryCard(
+                    title: "All Work",
+                    value: "\(assignments.count)",
+                    detail: "Assignments currently published in this course.",
+                    systemImage: "doc.text",
+                    tint: .blue
+                )
+
+                SummaryCard(
+                    title: "Upcoming",
+                    value: "\(upcomingCount)",
+                    detail: "Assignments still open and not yet submitted.",
+                    systemImage: "calendar",
+                    tint: .orange
+                )
+
+                SummaryCard(
+                    title: "Missing",
+                    value: "\(missingCount)",
+                    detail: "Items that Canvas marks as overdue or late.",
+                    systemImage: "exclamationmark.circle",
+                    tint: .red
+                )
+
+                SummaryCard(
+                    title: "Completed",
+                    value: "\(completedCount)",
+                    detail: "Submitted, graded, or excused work.",
+                    systemImage: "checkmark.circle",
+                    tint: .green
+                )
+            }
+
+            CourseWorkspaceControls(
+                searchPrompt: "Search assignments",
+                searchQuery: $searchQuery,
+                filter: $filter,
+                sort: $sort,
+                shownCount: filteredAssignments.count,
+                totalCount: assignments.count
+            )
+
+            if isLoading && assignments.isEmpty {
+                ProgressView("Loading assignments...")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 24)
+            } else if assignments.isEmpty {
+                SetupPromptView(
+                    title: "No Assignments Yet",
+                    message: "Canvas has not returned any assignments for this course."
+                )
+            } else if filteredAssignments.isEmpty {
+                SetupPromptView(
+                    title: "No Matching Work",
+                    message: "Change the search, filter, or sort controls to review a different slice of this course."
+                )
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(filteredAssignments) { assignment in
+                        CourseAssignmentRow(assignment: assignment, courseName: course.name)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedAssignment = assignment
+                            }
+
+                        if assignment.id != filteredAssignments.last?.id {
+                            Divider()
+                        }
+                    }
+                }
+            }
+        }
+        .sheet(item: $selectedAssignment) { assignment in
+            AssignmentDetailView(assignment: assignment, courseName: course.name)
         }
     }
 
@@ -1202,6 +1553,8 @@ private struct CourseGradesContent: View {
     let isLoading: Bool
     @Binding var searchQuery: String
     @Binding var sort: CourseGradeSort
+
+    @State private var selectedAssignment: CourseAssignment?
 
     private let summaryColumns = [
         GridItem(.flexible(), spacing: 12),
@@ -1289,99 +1642,108 @@ private struct CourseGradesContent: View {
     }
 
     var body: some View {
-        HStack {
-            Text("Grades")
-                .font(.title2.weight(.semibold))
-
-            Spacer()
-
-            Button("Refresh Grades") {
-                Task {
-                    await store.loadAssignments(for: course.id)
-                }
-            }
-        }
-
-        LazyVGrid(columns: summaryColumns, spacing: 12) {
-            SummaryCard(
-                title: "Current Grade",
-                value: enrollment?.displayCurrentGrade ?? weightedScoreLabel ?? "Hidden",
-                detail: enrollment?.displayFinalGrade.map { "Final grade \($0)." } ?? "Falls back to graded assignments when Canvas hides totals.",
-                systemImage: "graduationcap",
-                tint: .green
-            )
-
-            SummaryCard(
-                title: "Current Score",
-                value: enrollment?.displayCurrentScore ?? totalEarnedPointsLabel ?? "Pending",
-                detail: totalEarnedPointsLabel.map { "\($0) graded points recorded." } ?? "Scores will appear after graded work is returned.",
-                systemImage: "number.square",
-                tint: .blue
-            )
-
-            SummaryCard(
-                title: "Graded Items",
-                value: "\(allGradedAssignments.count)",
-                detail: "Assignments with posted scores or grades.",
-                systemImage: "checkmark.circle",
-                tint: .orange
-            )
-
-            SummaryCard(
-                title: "Need Attention",
-                value: "\(outstandingCount)",
-                detail: "Missing, late, or still-upcoming coursework.",
-                systemImage: "flag",
-                tint: .red
-            )
-        }
-
-        if let gradingPeriodTitle = enrollment?.currentGradingPeriodTitle,
-           let gradingPeriodGrade = enrollment?.displayCurrentPeriodGrade {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Current Grading Period")
-                    .font(.headline)
-
-                Text("\(gradingPeriodTitle): \(gradingPeriodGrade)\(enrollment?.displayCurrentPeriodScore.map { " (\($0))" } ?? "")")
-                    .foregroundStyle(.secondary)
-            }
-        }
-
-        CourseWorkspaceSearchSortControls(
-            searchPrompt: "Search graded assignments",
-            searchQuery: $searchQuery,
-            sort: $sort,
-            shownCount: gradedAssignments.count,
-            totalCount: allGradedAssignments.count
-        )
-
-        if isLoading && assignments.isEmpty {
-            ProgressView("Loading grades...")
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 24)
-        } else if allGradedAssignments.isEmpty {
-            SetupPromptView(
-                title: "No Grades Posted",
-                message: "Canvas has not returned any graded assignments for this course yet."
-            )
-        } else if gradedAssignments.isEmpty {
-            SetupPromptView(
-                title: "No Matching Scores",
-                message: "Change the search or sort controls to review more graded assignments."
-            )
-        } else {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Recent Scores")
+        Group {
+            HStack {
+                Text("Grades")
                     .font(.title2.weight(.semibold))
 
-                ForEach(gradedAssignments.prefix(10)) { assignment in
-                    CourseAssignmentRow(assignment: assignment, courseName: course.name)
+                Spacer()
 
-                    if assignment.id != gradedAssignments.prefix(10).last?.id {
-                        Divider()
+                Button("Refresh Grades") {
+                    Task {
+                        await store.loadAssignments(for: course.id)
                     }
                 }
             }
+
+            LazyVGrid(columns: summaryColumns, spacing: 12) {
+                SummaryCard(
+                    title: "Current Grade",
+                    value: enrollment?.displayCurrentGrade ?? weightedScoreLabel ?? "Hidden",
+                    detail: enrollment?.displayFinalGrade.map { "Final grade \($0)." } ?? "Falls back to graded assignments when Canvas hides totals.",
+                    systemImage: "graduationcap",
+                    tint: .green
+                )
+
+                SummaryCard(
+                    title: "Current Score",
+                    value: enrollment?.displayCurrentScore ?? totalEarnedPointsLabel ?? "Pending",
+                    detail: totalEarnedPointsLabel.map { "\($0) graded points recorded." } ?? "Scores will appear after graded work is returned.",
+                    systemImage: "number.square",
+                    tint: .blue
+                )
+
+                SummaryCard(
+                    title: "Graded Items",
+                    value: "\(allGradedAssignments.count)",
+                    detail: "Assignments with posted scores or grades.",
+                    systemImage: "checkmark.circle",
+                    tint: .orange
+                )
+
+                SummaryCard(
+                    title: "Need Attention",
+                    value: "\(outstandingCount)",
+                    detail: "Missing, late, or still-upcoming coursework.",
+                    systemImage: "flag",
+                    tint: .red
+                )
+            }
+
+            if let gradingPeriodTitle = enrollment?.currentGradingPeriodTitle,
+               let gradingPeriodGrade = enrollment?.displayCurrentPeriodGrade {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Current Grading Period")
+                        .font(.headline)
+
+                    Text("\(gradingPeriodTitle): \(gradingPeriodGrade)\(enrollment?.displayCurrentPeriodScore.map { " (\($0))" } ?? "")")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            CourseWorkspaceSearchSortControls(
+                searchPrompt: "Search graded assignments",
+                searchQuery: $searchQuery,
+                sort: $sort,
+                shownCount: gradedAssignments.count,
+                totalCount: allGradedAssignments.count
+            )
+
+            if isLoading && assignments.isEmpty {
+                ProgressView("Loading grades...")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 24)
+            } else if allGradedAssignments.isEmpty {
+                SetupPromptView(
+                    title: "No Grades Posted",
+                    message: "Canvas has not returned any graded assignments for this course yet."
+                )
+            } else if gradedAssignments.isEmpty {
+                SetupPromptView(
+                    title: "No Matching Scores",
+                    message: "Change the search or sort controls to review more graded assignments."
+                )
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Recent Scores")
+                        .font(.title2.weight(.semibold))
+
+                    ForEach(gradedAssignments.prefix(10)) { assignment in
+                        CourseAssignmentRow(assignment: assignment, courseName: course.name)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedAssignment = assignment
+                            }
+
+                        if assignment.id != gradedAssignments.prefix(10).last?.id {
+                            Divider()
+                        }
+                    }
+                }
+            }
+        }
+        .sheet(item: $selectedAssignment) { assignment in
+            AssignmentDetailView(assignment: assignment, courseName: course.name)
         }
     }
 
