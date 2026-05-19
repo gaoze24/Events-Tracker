@@ -629,6 +629,172 @@ struct CourseSyllabus: Codable, Identifiable, Hashable {
     }
 }
 
+enum CoursePersonRole: String, Codable, CaseIterable, Hashable {
+    case teacher
+    case ta
+    case student
+    case observer
+    case designer
+    case other
+
+    var label: String {
+        switch self {
+        case .teacher:
+            return "Teacher"
+        case .ta:
+            return "TA"
+        case .student:
+            return "Student"
+        case .observer:
+            return "Observer"
+        case .designer:
+            return "Designer"
+        case .other:
+            return "Other"
+        }
+    }
+
+    var sortPriority: Int {
+        switch self {
+        case .teacher:
+            return 0
+        case .ta:
+            return 1
+        case .designer:
+            return 2
+        case .student:
+            return 3
+        case .observer:
+            return 4
+        case .other:
+            return 5
+        }
+    }
+
+    static func normalized(from rawValues: [String]) -> CoursePersonRole {
+        let roleText = rawValues
+            .joined(separator: " ")
+            .lowercased()
+
+        if roleText.contains("teacher") {
+            return .teacher
+        }
+
+        if roleText.contains("ta") || roleText.contains("assistant") {
+            return .ta
+        }
+
+        if roleText.contains("student") {
+            return .student
+        }
+
+        if roleText.contains("observer") {
+            return .observer
+        }
+
+        if roleText.contains("designer") {
+            return .designer
+        }
+
+        return .other
+    }
+}
+
+struct CoursePersonEnrollment: Codable, Hashable {
+    let type: String?
+    let role: String?
+    let roleID: Int?
+    let sectionID: Int?
+    let sectionName: String?
+    let enrollmentState: String?
+    let lastActivityAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case role
+        case roleID = "role_id"
+        case sectionID = "course_section_id"
+        case sectionName = "course_section_name"
+        case enrollmentState = "enrollment_state"
+        case lastActivityAt = "last_activity_at"
+    }
+}
+
+struct CoursePerson: Codable, Identifiable, Hashable {
+    let id: Int
+    let name: String
+    let sortableName: String?
+    let shortName: String?
+    let avatarURL: URL?
+    let htmlURL: URL?
+    let email: String?
+    let loginID: String?
+    let enrollments: [CoursePersonEnrollment]?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case sortableName = "sortable_name"
+        case shortName = "short_name"
+        case avatarURL = "avatar_url"
+        case htmlURL = "html_url"
+        case email
+        case loginID = "login_id"
+        case enrollments
+    }
+
+    var displayName: String {
+        shortName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? shortName! : name
+    }
+
+    var initials: String {
+        let parts = displayName
+            .split(separator: " ")
+            .prefix(2)
+            .compactMap(\.first)
+
+        let value = String(parts).uppercased()
+        return value.isEmpty ? "?" : value
+    }
+
+    var primaryEnrollment: CoursePersonEnrollment? {
+        enrollments?.first
+    }
+
+    var primaryRole: CoursePersonRole {
+        CoursePersonRole.normalized(
+            from: enrollments?.flatMap { enrollment in
+                [enrollment.type, enrollment.role].compactMap { $0 }
+            } ?? []
+        )
+    }
+
+    var roleLabel: String {
+        primaryRole.label
+    }
+
+    var sectionLabel: String? {
+        primaryEnrollment?.sectionName?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var lastActivityAt: Date? {
+        enrollments?.compactMap(\.lastActivityAt).max()
+    }
+
+    func matchesSearch(_ query: String) -> Bool {
+        workspaceSearchMatches(
+            query,
+            in: name,
+            sortableName,
+            shortName,
+            email,
+            loginID,
+            sectionLabel,
+            roleLabel
+        )
+    }
+}
+
 struct CanvasAssignment: Codable, Hashable {
     let id: Int
     let name: String
@@ -1015,6 +1181,186 @@ struct MissingSubmission: Codable, Identifiable, Hashable {
         }
 
         return dueAt < referenceDate
+    }
+}
+
+struct CalendarEventItem: Identifiable, Hashable {
+    enum Kind: Hashable {
+        case upcoming(UpcomingEvent)
+        case missing(MissingSubmission)
+    }
+
+    let kind: Kind
+
+    var id: String {
+        switch kind {
+        case .upcoming(let event):
+            return "upcoming-\(event.id)"
+        case .missing(let submission):
+            return "missing-\(submission.id)"
+        }
+    }
+
+    var title: String {
+        switch kind {
+        case .upcoming(let event):
+            return event.title
+        case .missing(let submission):
+            return submission.name
+        }
+    }
+
+    var date: Date? {
+        switch kind {
+        case .upcoming(let event):
+            return event.displayDate
+        case .missing(let submission):
+            return submission.dueAt
+        }
+    }
+
+    var courseID: Int? {
+        switch kind {
+        case .upcoming(let event):
+            return event.courseID
+        case .missing(let submission):
+            return submission.courseID
+        }
+    }
+
+    var actionableURL: URL? {
+        switch kind {
+        case .upcoming(let event):
+            return event.actionableURL
+        case .missing(let submission):
+            return submission.htmlURL
+        }
+    }
+
+    var isMissing: Bool {
+        if case .missing = kind {
+            return true
+        }
+
+        return false
+    }
+
+    var isUpcoming: Bool {
+        if case .upcoming = kind {
+            return true
+        }
+
+        return false
+    }
+
+    var kindLabel: String {
+        isMissing ? "Missing" : "Upcoming"
+    }
+
+    static func items(
+        upcomingEvents: [UpcomingEvent],
+        missingSubmissions: [MissingSubmission]
+    ) -> [CalendarEventItem] {
+        let items = upcomingEvents.map { CalendarEventItem(kind: .upcoming($0)) }
+            + missingSubmissions.map { CalendarEventItem(kind: .missing($0)) }
+
+        return items.sorted(by: sort)
+    }
+
+    static func datedItems(
+        _ items: [CalendarEventItem],
+        on day: Date,
+        calendar: Calendar = .current
+    ) -> [CalendarEventItem] {
+        items.filter { item in
+            guard let date = item.date else {
+                return false
+            }
+
+            return calendar.isDate(date, inSameDayAs: day)
+        }
+    }
+
+    static func groupByDay(
+        _ items: [CalendarEventItem],
+        calendar: Calendar = .current
+    ) -> [Date: [CalendarEventItem]] {
+        let pairs = items.compactMap { item -> (Date, CalendarEventItem)? in
+            guard let date = item.date else {
+                return nil
+            }
+
+            return (calendar.startOfDay(for: date), item)
+        }
+
+        return Dictionary(grouping: pairs, by: \.0)
+            .mapValues { values in
+                values.map(\.1).sorted(by: sort)
+            }
+    }
+
+    static func visibleMonthDays(
+        containing date: Date,
+        calendar: Calendar = .current
+    ) -> [Date] {
+        guard
+            let monthInterval = calendar.dateInterval(of: .month, for: date),
+            let firstWeek = calendar.dateInterval(of: .weekOfMonth, for: monthInterval.start),
+            let lastMonthDay = calendar.date(byAdding: DateComponents(day: -1), to: monthInterval.end),
+            let lastWeek = calendar.dateInterval(of: .weekOfMonth, for: lastMonthDay)
+        else {
+            return []
+        }
+
+        var days: [Date] = []
+        var currentDate = calendar.startOfDay(for: firstWeek.start)
+        let endDate = calendar.startOfDay(for: lastWeek.end)
+
+        while currentDate < endDate {
+            days.append(currentDate)
+
+            guard let nextDate = calendar.date(byAdding: .day, value: 1, to: currentDate) else {
+                break
+            }
+
+            currentDate = nextDate
+        }
+
+        return days
+    }
+
+    static func visibleWeekDays(
+        containing date: Date,
+        calendar: Calendar = .current
+    ) -> [Date] {
+        guard let weekInterval = calendar.dateInterval(of: .weekOfMonth, for: date) else {
+            return []
+        }
+
+        return (0..<7).compactMap { offset in
+            calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: weekInterval.start))
+        }
+    }
+
+    private static func sort(_ lhs: CalendarEventItem, _ rhs: CalendarEventItem) -> Bool {
+        switch (lhs.date, rhs.date) {
+        case let (left?, right?):
+            if left != right {
+                return left < right
+            }
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        case (.none, .none):
+            break
+        }
+
+        if lhs.isMissing != rhs.isMissing {
+            return lhs.isMissing
+        }
+
+        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
     }
 }
 

@@ -24,6 +24,8 @@ final class CanvasStore: ObservableObject {
     @Published private(set) var loadingCourseAnnouncementIDs: Set<Int>
     @Published private(set) var courseSyllabusByCourseID: [Int: CourseSyllabus]
     @Published private(set) var loadingCourseSyllabusIDs: Set<Int>
+    @Published private(set) var coursePeopleByCourseID: [Int: [CoursePerson]]
+    @Published private(set) var loadingCoursePeopleIDs: Set<Int>
     @Published private(set) var upcomingEvents: [UpcomingEvent]
     @Published private(set) var missingSubmissions: [MissingSubmission]
     @Published private(set) var profile: UserProfile?
@@ -82,6 +84,8 @@ final class CanvasStore: ObservableObject {
             loadingCourseAnnouncementIDs = []
             courseSyllabusByCourseID = [:]
             loadingCourseSyllabusIDs = []
+            coursePeopleByCourseID = [:]
+            loadingCoursePeopleIDs = []
             upcomingEvents = snapshot.upcomingEvents
             missingSubmissions = snapshot.missingSubmissions
             profile = snapshot.profile
@@ -100,6 +104,8 @@ final class CanvasStore: ObservableObject {
             loadingCourseAnnouncementIDs = []
             courseSyllabusByCourseID = [:]
             loadingCourseSyllabusIDs = []
+            coursePeopleByCourseID = [:]
+            loadingCoursePeopleIDs = []
             upcomingEvents = []
             missingSubmissions = []
             profile = nil
@@ -316,6 +322,14 @@ final class CanvasStore: ObservableObject {
         return courseSyllabusByCourseID[courseID]
     }
 
+    func people(for courseID: Int?) -> [CoursePerson] {
+        guard let courseID else {
+            return []
+        }
+
+        return coursePeopleByCourseID[courseID] ?? []
+    }
+
     func hasLoadedAssignments(for courseID: Int?) -> Bool {
         guard let courseID else {
             return false
@@ -486,6 +500,22 @@ final class CanvasStore: ObservableObject {
         return loadingCourseSyllabusIDs.contains(courseID)
     }
 
+    func hasLoadedPeople(for courseID: Int?) -> Bool {
+        guard let courseID else {
+            return false
+        }
+
+        return coursePeopleByCourseID[courseID] != nil
+    }
+
+    func isLoadingPeople(for courseID: Int?) -> Bool {
+        guard let courseID else {
+            return false
+        }
+
+        return loadingCoursePeopleIDs.contains(courseID)
+    }
+
     func loadCourseFilesIfNeeded(for courseID: Int?) async {
         guard let courseID else {
             return
@@ -642,6 +672,43 @@ final class CanvasStore: ObservableObject {
         loadingCourseSyllabusIDs.remove(courseID)
     }
 
+    func loadPeopleIfNeeded(for courseID: Int?) async {
+        guard let courseID else {
+            return
+        }
+
+        if coursePeopleByCourseID[courseID] != nil {
+            markCourseDetailAccess(courseID)
+            return
+        }
+
+        guard !loadingCoursePeopleIDs.contains(courseID) else {
+            return
+        }
+
+        await loadPeople(for: courseID)
+    }
+
+    func loadPeople(for courseID: Int) async {
+        guard config.isComplete else {
+            errorMessage = CanvasServiceError.incompleteConfiguration.localizedDescription
+            return
+        }
+
+        loadingCoursePeopleIDs.insert(courseID)
+
+        do {
+            let people = try await networkManager.fetchPeople(courseID: courseID, using: config)
+            coursePeopleByCourseID[courseID] = people
+            markCourseDetailAccess(courseID)
+            persistCourseDetailCache()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        loadingCoursePeopleIDs.remove(courseID)
+    }
+
     func startTelegramReminderService() {
         reminderService.start()
     }
@@ -736,6 +803,7 @@ final class CanvasStore: ObservableObject {
             filesByFolderID: courseFilesByFolderID,
             announcementsByCourseID: courseAnnouncementsByCourseID,
             syllabusByCourseID: courseSyllabusByCourseID,
+            peopleByCourseID: coursePeopleByCourseID,
             courseAccessedAtByCourseID: courseDetailAccessDates,
             savedAt: savedAt
         )
@@ -748,6 +816,7 @@ final class CanvasStore: ObservableObject {
         courseFilesByFolderID = snapshot.filesByFolderID
         courseAnnouncementsByCourseID = snapshot.announcementsByCourseID
         courseSyllabusByCourseID = snapshot.syllabusByCourseID
+        coursePeopleByCourseID = snapshot.peopleByCourseID
         courseDetailAccessDates = snapshot.courseAccessedAtByCourseID
     }
 
@@ -780,6 +849,8 @@ final class CanvasStore: ObservableObject {
         loadingCourseAnnouncementIDs = []
         courseSyllabusByCourseID = [:]
         loadingCourseSyllabusIDs = []
+        coursePeopleByCourseID = [:]
+        loadingCoursePeopleIDs = []
         courseDetailAccessDates = [:]
     }
 
