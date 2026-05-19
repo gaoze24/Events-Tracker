@@ -206,6 +206,39 @@ final class NetworkManager {
         }
     }
 
+    func fetchQuizDetail(courseID: Int, quizID: Int, using config: CanvasConfig) async throws -> CourseQuizDetail {
+        try await request(
+            path: "/api/v1/courses/\(courseID)/quizzes/\(quizID)",
+            queryItems: [],
+            config: config,
+            responseType: CourseQuizDetail.self
+        )
+    }
+
+    func fetchDiscussionDetail(
+        courseID: Int,
+        discussionID: Int,
+        using config: CanvasConfig
+    ) async throws -> CourseDiscussionDetail {
+        try await request(
+            path: "/api/v1/courses/\(courseID)/discussion_topics/\(discussionID)",
+            queryItems: [],
+            config: config,
+            responseType: CourseDiscussionDetail.self
+        )
+    }
+
+    func fetchPageDetail(courseID: Int, pageURL: String, using config: CanvasConfig) async throws -> CoursePageDetail {
+        let encodedPageURL = pageURL.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? pageURL
+
+        return try await request(
+            path: "/api/v1/courses/\(courseID)/pages/\(encodedPageURL)",
+            queryItems: [],
+            config: config,
+            responseType: CoursePageDetail.self
+        )
+    }
+
     func fetchUpcomingEvents(using config: CanvasConfig) async throws -> [UpcomingEvent] {
         let queryItems = [
             URLQueryItem(name: "per_page", value: "100")

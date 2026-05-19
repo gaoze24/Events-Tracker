@@ -200,6 +200,15 @@ struct CoursePeopleContent: View {
         .sheet(item: $selectedPerson) { person in
             CoursePersonDetailView(person: person, courseName: course.name)
         }
+        .onAppear {
+            let preference = store.coursePreference(for: course.id).people
+            searchQuery = preference.searchQuery
+            filter = CoursePeopleFilter(rawValue: preference.filter) ?? .all
+            sort = CoursePeopleSort(rawValue: preference.sort) ?? .role
+        }
+        .onChange(of: searchQuery) { _, _ in persistPreference() }
+        .onChange(of: filter) { _, _ in persistPreference() }
+        .onChange(of: sort) { _, _ in persistPreference() }
     }
 
     private func sortByRole(_ lhs: CoursePerson, _ rhs: CoursePerson) -> Bool {
@@ -231,6 +240,16 @@ struct CoursePeopleContent: View {
         }
 
         return sortByRole(lhs, rhs)
+    }
+
+    private func persistPreference() {
+        store.updateCoursePreference(courseID: course.id) { preference in
+            preference.people = CourseWorkspacePreference(
+                searchQuery: searchQuery,
+                filter: filter.rawValue,
+                sort: sort.rawValue
+            )
+        }
     }
 }
 

@@ -384,6 +384,15 @@ struct CourseModuleItem: Codable, Identifiable, Hashable {
         contentDetails?.lockedForUser ?? false
     }
 
+    var supportsNativeDetail: Bool {
+        switch type {
+        case "Quiz", "Discussion", "Page":
+            return true
+        default:
+            return false
+        }
+    }
+
     var pointsDescription: String? {
         guard let points = contentDetails?.pointsPossible else {
             return nil
@@ -425,6 +434,310 @@ struct ModuleItemContentDetails: Codable, Hashable {
         case lockedForUser = "locked_for_user"
         case lockExplanation = "lock_explanation"
         case htmlURL = "html_url"
+    }
+}
+
+struct CourseModuleItemDetailKey: RawRepresentable, Codable, Hashable, Identifiable {
+    let rawValue: String
+
+    var id: String { rawValue }
+
+    static func quiz(courseID: Int, quizID: Int) -> CourseModuleItemDetailKey {
+        CourseModuleItemDetailKey(rawValue: "quiz:\(courseID):\(quizID)")
+    }
+
+    static func discussion(courseID: Int, discussionID: Int) -> CourseModuleItemDetailKey {
+        CourseModuleItemDetailKey(rawValue: "discussion:\(courseID):\(discussionID)")
+    }
+
+    static func page(courseID: Int, pageURL: String) -> CourseModuleItemDetailKey {
+        CourseModuleItemDetailKey(rawValue: "page:\(courseID):\(pageURL)")
+    }
+
+    static func key(courseID: Int, item: CourseModuleItem) -> CourseModuleItemDetailKey? {
+        switch item.type {
+        case "Quiz":
+            guard let contentID = item.contentID else {
+                return nil
+            }
+
+            return .quiz(courseID: courseID, quizID: contentID)
+        case "Discussion":
+            guard let contentID = item.contentID else {
+                return nil
+            }
+
+            return .discussion(courseID: courseID, discussionID: contentID)
+        case "Page":
+            guard let pageURL = item.pageURL?.trimmingCharacters(in: .whitespacesAndNewlines), !pageURL.isEmpty else {
+                return nil
+            }
+
+            return .page(courseID: courseID, pageURL: pageURL)
+        default:
+            return nil
+        }
+    }
+
+    var courseID: Int? {
+        let parts = rawValue.split(separator: ":", maxSplits: 2).map(String.init)
+        guard parts.count >= 2 else {
+            return nil
+        }
+
+        return Int(parts[1])
+    }
+
+    var contentIdentifier: String? {
+        let parts = rawValue.split(separator: ":", maxSplits: 2).map(String.init)
+        guard parts.count == 3 else {
+            return nil
+        }
+
+        return parts[2]
+    }
+}
+
+struct CourseQuizDetail: Codable, Identifiable, Hashable {
+    let id: Int
+    let title: String
+    let description: String?
+    let htmlURL: URL?
+    let quizType: String?
+    let dueAt: Date?
+    let unlockAt: Date?
+    let lockAt: Date?
+    let pointsPossible: Double?
+    let questionCount: Int?
+    let allowedAttempts: Int?
+    let timeLimit: Int?
+    let published: Bool?
+    let lockedForUser: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case description
+        case htmlURL = "html_url"
+        case quizType = "quiz_type"
+        case dueAt = "due_at"
+        case unlockAt = "unlock_at"
+        case lockAt = "lock_at"
+        case pointsPossible = "points_possible"
+        case questionCount = "question_count"
+        case allowedAttempts = "allowed_attempts"
+        case timeLimit = "time_limit"
+        case published
+        case lockedForUser = "locked_for_user"
+    }
+
+    var summaryText: String? {
+        strippedCanvasHTML(description)
+    }
+
+    var displayTitle: String { title }
+}
+
+struct CourseDiscussionAuthor: Codable, Hashable {
+    let id: Int?
+    let displayName: String?
+    let avatarImageURL: URL?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case displayName = "display_name"
+        case avatarImageURL = "avatar_image_url"
+    }
+}
+
+struct CourseDiscussionDetail: Codable, Identifiable, Hashable {
+    let id: Int
+    let title: String
+    let message: String?
+    let htmlURL: URL?
+    let postedAt: Date?
+    let delayedPostAt: Date?
+    let lastReplyAt: Date?
+    let discussionSubentryCount: Int?
+    let unreadCount: Int?
+    let locked: Bool?
+    let lockedForUser: Bool?
+    let pinned: Bool?
+    let published: Bool?
+    let requireInitialPost: Bool?
+    let userName: String?
+    let author: CourseDiscussionAuthor?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case message
+        case htmlURL = "html_url"
+        case postedAt = "posted_at"
+        case delayedPostAt = "delayed_post_at"
+        case lastReplyAt = "last_reply_at"
+        case discussionSubentryCount = "discussion_subentry_count"
+        case unreadCount = "unread_count"
+        case locked
+        case lockedForUser = "locked_for_user"
+        case pinned
+        case published
+        case requireInitialPost = "require_initial_post"
+        case userName = "user_name"
+        case author
+    }
+
+    var summaryText: String? {
+        strippedCanvasHTML(message)
+    }
+
+    var authorName: String? {
+        author?.displayName ?? userName
+    }
+
+    var displayTitle: String { title }
+}
+
+struct CoursePageDetail: Codable, Identifiable, Hashable {
+    let pageID: Int?
+    let url: String
+    let title: String
+    let body: String?
+    let htmlURL: URL?
+    let frontPage: Bool?
+    let published: Bool?
+    let createdAt: Date?
+    let updatedAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case pageID = "page_id"
+        case url
+        case title
+        case body
+        case htmlURL = "html_url"
+        case frontPage = "front_page"
+        case published
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+
+    var id: String { url }
+
+    var summaryText: String? {
+        strippedCanvasHTML(body)
+    }
+
+    var displayTitle: String { title }
+}
+
+enum CourseModuleItemDetail: Codable, Hashable {
+    case quiz(CourseQuizDetail)
+    case discussion(CourseDiscussionDetail)
+    case page(CoursePageDetail)
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case quiz
+        case discussion
+        case page
+    }
+
+    enum DetailType: String, Codable {
+        case quiz
+        case discussion
+        case page
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try container.decode(DetailType.self, forKey: .type)
+
+        switch type {
+        case .quiz:
+            self = .quiz(try container.decode(CourseQuizDetail.self, forKey: .quiz))
+        case .discussion:
+            self = .discussion(try container.decode(CourseDiscussionDetail.self, forKey: .discussion))
+        case .page:
+            self = .page(try container.decode(CoursePageDetail.self, forKey: .page))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+
+        switch self {
+        case .quiz(let detail):
+            try container.encode(DetailType.quiz, forKey: .type)
+            try container.encode(detail, forKey: .quiz)
+        case .discussion(let detail):
+            try container.encode(DetailType.discussion, forKey: .type)
+            try container.encode(detail, forKey: .discussion)
+        case .page(let detail):
+            try container.encode(DetailType.page, forKey: .type)
+            try container.encode(detail, forKey: .page)
+        }
+    }
+}
+
+struct CourseWorkspacePreference: Codable, Equatable {
+    var searchQuery: String
+    var filter: String
+    var sort: String
+
+    init(searchQuery: String = "", filter: String = "All", sort: String = "") {
+        self.searchQuery = searchQuery
+        self.filter = filter
+        self.sort = sort
+    }
+}
+
+struct SingleCoursePreference: Codable, Equatable {
+    var workspaceSection: String
+    var modules: CourseWorkspacePreference
+    var files: CourseWorkspacePreference
+    var announcements: CourseWorkspacePreference
+    var assignments: CourseWorkspacePreference
+    var grades: CourseWorkspacePreference
+    var people: CourseWorkspacePreference
+
+    init(
+        workspaceSection: String = "Overview",
+        modules: CourseWorkspacePreference = CourseWorkspacePreference(sort: "Canvas Order"),
+        files: CourseWorkspacePreference = CourseWorkspacePreference(sort: "Canvas Order"),
+        announcements: CourseWorkspacePreference = CourseWorkspacePreference(sort: "Recent"),
+        assignments: CourseWorkspacePreference = CourseWorkspacePreference(sort: "Due Date"),
+        grades: CourseWorkspacePreference = CourseWorkspacePreference(sort: "Recent"),
+        people: CourseWorkspacePreference = CourseWorkspacePreference(sort: "Role")
+    ) {
+        self.workspaceSection = workspaceSection
+        self.modules = modules
+        self.files = files
+        self.announcements = announcements
+        self.assignments = assignments
+        self.grades = grades
+        self.people = people
+    }
+}
+
+struct CoursePreferencesSnapshot: Codable, Equatable {
+    var pinnedCourseIDs: Set<Int>
+    var hiddenCourseIDs: Set<Int>
+    var defaultCourseID: Int?
+    var defaultEventsCourseID: Int?
+    var preferencesByCourseID: [Int: SingleCoursePreference]
+
+    init(
+        pinnedCourseIDs: Set<Int> = [],
+        hiddenCourseIDs: Set<Int> = [],
+        defaultCourseID: Int? = nil,
+        defaultEventsCourseID: Int? = nil,
+        preferencesByCourseID: [Int: SingleCoursePreference] = [:]
+    ) {
+        self.pinnedCourseIDs = pinnedCourseIDs
+        self.hiddenCourseIDs = hiddenCourseIDs
+        self.defaultCourseID = defaultCourseID
+        self.defaultEventsCourseID = defaultEventsCourseID
+        self.preferencesByCourseID = preferencesByCourseID
     }
 }
 

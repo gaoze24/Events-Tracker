@@ -248,6 +248,7 @@ struct CourseListRow: View {
 
 struct CourseModuleCard: View {
     let module: CourseModule
+    var onOpenNativeDetail: ((CourseModuleItem) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -282,7 +283,7 @@ struct CourseModuleCard: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(module.sortedItems) { item in
-                    CourseModuleItemRow(item: item)
+                    CourseModuleItemRow(item: item, onOpenNativeDetail: onOpenNativeDetail)
 
                     if item.id != module.sortedItems.last?.id {
                         Divider()
@@ -298,6 +299,7 @@ struct CourseModuleCard: View {
 
 struct CourseModuleItemRow: View {
     let item: CourseModuleItem
+    var onOpenNativeDetail: ((CourseModuleItem) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -321,6 +323,14 @@ struct CourseModuleItemRow: View {
                 }
 
                 Spacer()
+
+                if item.supportsNativeDetail {
+                    Button("Details") {
+                        onOpenNativeDetail?(item)
+                    }
+                    .font(.caption.weight(.semibold))
+                    .disabled(onOpenNativeDetail == nil)
+                }
 
                 if let url = item.actionableURL {
                     Link("Open", destination: url)
