@@ -12,6 +12,7 @@ private enum CourseWorkspaceSection: String, CaseIterable, Identifiable {
     case modules = "Modules"
     case announcements = "Announcements"
     case syllabus = "Syllabus"
+    case people = "People"
     case files = "Files"
     case assignments = "Assignments"
     case grades = "Grades"
@@ -193,6 +194,10 @@ struct CoursesView: View {
         store.syllabus(for: store.selectedCourseID)
     }
 
+    private var selectedCoursePeople: [CoursePerson] {
+        store.people(for: store.selectedCourseID)
+    }
+
     private var isLoadingSelectedCourseModules: Bool {
         store.isLoadingModules(for: store.selectedCourseID)
     }
@@ -213,6 +218,10 @@ struct CoursesView: View {
         store.isLoadingSyllabus(for: store.selectedCourseID)
     }
 
+    private var isLoadingSelectedCoursePeople: Bool {
+        store.isLoadingPeople(for: store.selectedCourseID)
+    }
+
     private var hasLoadedSelectedCourseModules: Bool {
         store.hasLoadedModules(for: store.selectedCourseID)
     }
@@ -231,6 +240,10 @@ struct CoursesView: View {
 
     private var hasLoadedSelectedCourseSyllabus: Bool {
         store.hasLoadedSyllabus(for: store.selectedCourseID)
+    }
+
+    private var hasLoadedSelectedCoursePeople: Bool {
+        store.hasLoadedPeople(for: store.selectedCourseID)
     }
 
     private var selectedCourseUpcomingItems: [UpcomingEvent] {
@@ -343,6 +356,13 @@ struct CoursesView: View {
                                     syllabus: selectedCourseSyllabus,
                                     isLoading: isLoadingSelectedCourseSyllabus
                                 )
+                            case .people:
+                                CoursePeopleContent(
+                                    course: selectedCourse,
+                                    people: selectedCoursePeople,
+                                    isLoading: isLoadingSelectedCoursePeople,
+                                    hasLoaded: hasLoadedSelectedCoursePeople
+                                )
                             case .files:
                                 CourseFilesContent(
                                     course: selectedCourse,
@@ -381,6 +401,8 @@ struct CoursesView: View {
                             await store.loadAnnouncementsIfNeeded(for: selectedCourse.id)
                         case .syllabus:
                             await store.loadSyllabusIfNeeded(for: selectedCourse.id)
+                        case .people:
+                            await store.loadPeopleIfNeeded(for: selectedCourse.id)
                         case .files:
                             await store.loadCourseFilesIfNeeded(for: selectedCourse.id)
                         case .assignments, .grades:

@@ -186,6 +186,26 @@ final class NetworkManager {
         )
     }
 
+    func fetchPeople(courseID: Int, using config: CanvasConfig) async throws -> [CoursePerson] {
+        let people: [CoursePerson] = try await requestPaginatedArray(
+            path: "/api/v1/courses/\(courseID)/users",
+            queryItems: [
+                URLQueryItem(name: "include[]", value: "enrollments"),
+                URLQueryItem(name: "include[]", value: "avatar_url"),
+                URLQueryItem(name: "per_page", value: "100")
+            ],
+            config: config
+        )
+
+        return people.sorted {
+            if $0.primaryRole.sortPriority != $1.primaryRole.sortPriority {
+                return $0.primaryRole.sortPriority < $1.primaryRole.sortPriority
+            }
+
+            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
     func fetchUpcomingEvents(using config: CanvasConfig) async throws -> [UpcomingEvent] {
         let queryItems = [
             URLQueryItem(name: "per_page", value: "100")

@@ -5,11 +5,15 @@ Events Tracker is a macOS SwiftUI app for students who want a cleaner Canvas das
 ## What It Does
 
 - Connects to a Canvas instance with a personal access token
-- Loads active courses, upcoming events, missing submissions, and the current user profile
-- Caches dashboard data locally for faster relaunches
-- Lets you filter upcoming and missing work by course
+- Loads active courses, upcoming events, missing submissions, grades, course details, people, and the current user profile
+- Presents a dashboard for overdue work, today, this week, and later priorities
+- Provides a calendar workspace with calendar, week, and agenda views
+- Adds course workspaces for overview, modules, announcements, syllabus, files, people, assignments, and grades
+- Caches dashboard and course detail data locally for faster relaunches
+- Lets you filter course work, calendar items, files, announcements, and people
+- Can send Telegram reminders for assignments due soon while the app is open
 
-This is currently a focused planner and dashboard companion, not a full Canvas replacement yet.
+This is a student-side Canvas companion. It focuses on planning, course context, and quick review, while still linking back to Canvas for workflows that are not native yet.
 
 ## Requirements
 
@@ -51,6 +55,13 @@ The script writes `dist/Events Tracker.app`. Set `CONFIGURATION=Release` if you 
 - `Events TrackerTests/` unit tests
 - `Events TrackerUITests/` UI launch tests
 
+## Data And Caching
+
+- Canvas configuration is stored under Application Support.
+- Canvas and Telegram tokens are stored in the macOS Keychain.
+- Dashboard snapshots and lazily loaded course details are cached locally with short TTLs.
+- Changing the Canvas URL or token clears cached app data so accounts do not mix.
+
 ## Security Notes
 
 - Do **not** commit real Canvas tokens.
@@ -59,4 +70,4 @@ The script writes `dist/Events Tracker.app`. Set `CONFIGURATION=Release` if you 
 
 ## Current Direction
 
-The app now covers the dashboard layer well. The next logical areas are modules, announcements, grades, and richer assignment workflows.
+The app now covers the core student planning surface, course workspace, files, syllabus, announcements, people, assignments, grades, local cache, and Telegram reminders. The next logical areas are richer assignment workflows, native quiz/discussion/page detail views, Canvas Inbox or notification support, saved course preferences, and clearer cache/offline state.

@@ -26,8 +26,69 @@ struct CourseDetailCacheSnapshot: Codable, Equatable {
     let filesByFolderID: [Int: [CanvasFile]]
     let announcementsByCourseID: [Int: [CourseAnnouncement]]
     let syllabusByCourseID: [Int: CourseSyllabus]
+    let peopleByCourseID: [Int: [CoursePerson]]
     let courseAccessedAtByCourseID: [Int: Date]
     let savedAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case assignmentsByCourseID
+        case modulesByCourseID
+        case foldersByCourseID
+        case filesByFolderID
+        case announcementsByCourseID
+        case syllabusByCourseID
+        case peopleByCourseID
+        case courseAccessedAtByCourseID
+        case savedAt
+    }
+
+    init(
+        assignmentsByCourseID: [Int: [CourseAssignment]],
+        modulesByCourseID: [Int: [CourseModule]],
+        foldersByCourseID: [Int: [CanvasFolder]],
+        filesByFolderID: [Int: [CanvasFile]],
+        announcementsByCourseID: [Int: [CourseAnnouncement]],
+        syllabusByCourseID: [Int: CourseSyllabus],
+        peopleByCourseID: [Int: [CoursePerson]] = [:],
+        courseAccessedAtByCourseID: [Int: Date],
+        savedAt: Date
+    ) {
+        self.assignmentsByCourseID = assignmentsByCourseID
+        self.modulesByCourseID = modulesByCourseID
+        self.foldersByCourseID = foldersByCourseID
+        self.filesByFolderID = filesByFolderID
+        self.announcementsByCourseID = announcementsByCourseID
+        self.syllabusByCourseID = syllabusByCourseID
+        self.peopleByCourseID = peopleByCourseID
+        self.courseAccessedAtByCourseID = courseAccessedAtByCourseID
+        self.savedAt = savedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        assignmentsByCourseID = try container.decode([Int: [CourseAssignment]].self, forKey: .assignmentsByCourseID)
+        modulesByCourseID = try container.decode([Int: [CourseModule]].self, forKey: .modulesByCourseID)
+        foldersByCourseID = try container.decode([Int: [CanvasFolder]].self, forKey: .foldersByCourseID)
+        filesByFolderID = try container.decode([Int: [CanvasFile]].self, forKey: .filesByFolderID)
+        announcementsByCourseID = try container.decode([Int: [CourseAnnouncement]].self, forKey: .announcementsByCourseID)
+        syllabusByCourseID = try container.decode([Int: CourseSyllabus].self, forKey: .syllabusByCourseID)
+        peopleByCourseID = try container.decodeIfPresent([Int: [CoursePerson]].self, forKey: .peopleByCourseID) ?? [:]
+        courseAccessedAtByCourseID = try container.decode([Int: Date].self, forKey: .courseAccessedAtByCourseID)
+        savedAt = try container.decode(Date.self, forKey: .savedAt)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(assignmentsByCourseID, forKey: .assignmentsByCourseID)
+        try container.encode(modulesByCourseID, forKey: .modulesByCourseID)
+        try container.encode(foldersByCourseID, forKey: .foldersByCourseID)
+        try container.encode(filesByFolderID, forKey: .filesByFolderID)
+        try container.encode(announcementsByCourseID, forKey: .announcementsByCourseID)
+        try container.encode(syllabusByCourseID, forKey: .syllabusByCourseID)
+        try container.encode(peopleByCourseID, forKey: .peopleByCourseID)
+        try container.encode(courseAccessedAtByCourseID, forKey: .courseAccessedAtByCourseID)
+        try container.encode(savedAt, forKey: .savedAt)
+    }
 
     func prunedForMemory(
         now: Date = Date(),
@@ -69,6 +130,7 @@ struct CourseDetailCacheSnapshot: Codable, Equatable {
             filesByFolderID: filesForKeptCourses(keptCourseIDs),
             announcementsByCourseID: announcementsByCourseID.filterKeys(keptCourseIDs),
             syllabusByCourseID: syllabusByCourseID.filterKeys(keptCourseIDs),
+            peopleByCourseID: peopleByCourseID.filterKeys(keptCourseIDs),
             courseAccessedAtByCourseID: courseAccessedAtByCourseID.filterKeys(keptCourseIDs),
             savedAt: savedAt
         )
@@ -82,6 +144,7 @@ struct CourseDetailCacheSnapshot: Codable, Equatable {
             filesByFolderID: filesForKeptCourses(courseIDs),
             announcementsByCourseID: announcementsByCourseID.filterKeys(courseIDs),
             syllabusByCourseID: syllabusByCourseID.filterKeys(courseIDs),
+            peopleByCourseID: peopleByCourseID.filterKeys(courseIDs),
             courseAccessedAtByCourseID: courseAccessedAtByCourseID.filterKeys(courseIDs),
             savedAt: savedAt
         )
@@ -93,6 +156,7 @@ struct CourseDetailCacheSnapshot: Codable, Equatable {
             .union(foldersByCourseID.keys)
             .union(announcementsByCourseID.keys)
             .union(syllabusByCourseID.keys)
+            .union(peopleByCourseID.keys)
     }
 
     private func filesForKeptCourses(_ courseIDs: Set<Int>) -> [Int: [CanvasFile]] {

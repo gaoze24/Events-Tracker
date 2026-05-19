@@ -523,6 +523,71 @@ struct Events_TrackerTests {
         #expect(syllabus.matchesSearch("notebook daily"))
     }
 
+    @Test func calendarEventItemsBucketUpcomingAndMissingByDay() async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let dueDate = calendar.date(from: DateComponents(year: 2026, month: 5, day: 19, hour: 12))!
+        let upcoming = makeUpcomingEvent(date: dueDate)
+        let missing = MissingSubmission(
+            id: 44,
+            name: "Late Essay",
+            dueAt: dueDate,
+            courseID: 10,
+            htmlURL: nil,
+            pointsPossible: 10
+        )
+
+        let items = CalendarEventItem.items(upcomingEvents: [upcoming], missingSubmissions: [missing])
+        let grouped = CalendarEventItem.groupByDay(items, calendar: calendar)
+
+        #expect(items.count == 2)
+        #expect(grouped.count == 1)
+        #expect(grouped.values.first?.contains { $0.isMissing } == true)
+        #expect(grouped.values.first?.contains { $0.isUpcoming } == true)
+    }
+
+    @Test func calendarMonthBuildsFullWeeksAroundMonthBoundaries() async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let month = calendar.date(from: DateComponents(year: 2026, month: 5, day: 19))!
+
+        let days = CalendarEventItem.visibleMonthDays(containing: month, calendar: calendar)
+
+        #expect(days.count % 7 == 0)
+        #expect(days.count >= 35)
+        #expect(days.contains { calendar.component(.month, from: $0) == 5 })
+    }
+
+    @Test func coursePersonNormalizesRolesAndMatchesSearch() async throws {
+        let teacher = CoursePerson(
+            id: 1,
+            name: "Dr. Smith",
+            sortableName: "Smith, Dr.",
+            shortName: "Dr. Smith",
+            avatarURL: nil,
+            htmlURL: nil,
+            email: "smith@example.edu",
+            loginID: "smith",
+            enrollments: [
+                CoursePersonEnrollment(
+                    type: "TeacherEnrollment",
+                    role: "TeacherEnrollment",
+                    roleID: nil,
+                    sectionID: nil,
+                    sectionName: "Lecture",
+                    enrollmentState: "active",
+                    lastActivityAt: nil
+                )
+            ]
+        )
+
+        #expect(teacher.primaryRole == .teacher)
+        #expect(teacher.roleLabel == "Teacher")
+        #expect(teacher.matchesSearch("smith"))
+        #expect(teacher.matchesSearch("lecture"))
+        #expect(!teacher.matchesSearch("biology"))
+    }
+
     @Test func networkManagerFetchesAnnouncementsWithCourseContext() async throws {
         let session = makeCapturingURLSession { request in
             guard
@@ -604,6 +669,56 @@ struct Events_TrackerTests {
         #expect(components.path == "/api/v1/courses/42")
         #expect(queryItems.contains(URLQueryItem(name: "include[]", value: "syllabus_body")))
         #expect(syllabus.summaryText == "Welcome to class.")
+    }
+
+    @Test func networkManagerFetchesCoursePeopleWithEnrollments() async throws {
+        let session = makeCapturingURLSession { request in
+            guard
+                let url = request.url,
+                let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            else {
+                throw CanvasServiceError.invalidResponse
+            }
+
+            let data = """
+            [
+              {
+                "id": 7,
+                "name": "Dr. Smith",
+                "sortable_name": "Smith, Dr.",
+                "short_name": "Dr. Smith",
+                "avatar_url": "https://canvas.example.edu/avatar.png",
+                "html_url": "https://canvas.example.edu/courses/42/users/7",
+                "email": "smith@example.edu",
+                "enrollments": [
+                  {
+                    "type": "TeacherEnrollment",
+                    "role": "TeacherEnrollment",
+                    "course_section_name": "Lecture",
+                    "enrollment_state": "active"
+                  }
+                ]
+              }
+            ]
+            """.data(using: .utf8)!
+
+            return (response, data)
+        }
+        let manager = NetworkManager(session: session)
+
+        let people = try await manager.fetchPeople(courseID: 42, using: makeCanvasConfig())
+        let request = try #require(CapturingURLProtocol.lastRequest)
+        let requestURL = try #require(request.url)
+        let components = try #require(URLComponents(url: requestURL, resolvingAgainstBaseURL: false))
+        let queryItems = components.queryItems ?? []
+
+        #expect(components.path == "/api/v1/courses/42/users")
+        #expect(queryItems.contains(URLQueryItem(name: "include[]", value: "enrollments")))
+        #expect(queryItems.contains(URLQueryItem(name: "include[]", value: "avatar_url")))
+        #expect(queryItems.contains(URLQueryItem(name: "per_page", value: "100")))
+        #expect(people.count == 1)
+        #expect(people.first?.primaryRole == .teacher)
+        #expect(people.first?.sectionLabel == "Lecture")
     }
 
     @Test func courseStudentEnrollmentPrefersStudentScores() async throws {
@@ -864,6 +979,11 @@ struct Events_TrackerTests {
             ],
             announcementsByCourseID: [:],
             syllabusByCourseID: [:],
+            peopleByCourseID: [
+                1: [makeCoursePerson(id: 1, name: "Protected Teacher", role: "TeacherEnrollment")],
+                2: [makeCoursePerson(id: 2, name: "Middle Student", role: "StudentEnrollment")],
+                3: [makeCoursePerson(id: 3, name: "Recent Student", role: "StudentEnrollment")]
+            ],
             courseAccessedAtByCourseID: [
                 1: expiredAccessDate,
                 2: middleAccessDate,
@@ -882,6 +1002,7 @@ struct Events_TrackerTests {
         #expect(pruned.assignmentsByCourseID.keys.sorted() == [1, 3])
         #expect(pruned.foldersByCourseID.keys.sorted() == [1, 3])
         #expect(pruned.filesByFolderID.keys.sorted() == [101, 301])
+        #expect(pruned.peopleByCourseID.keys.sorted() == [1, 3])
         #expect(pruned.courseAccessedAtByCourseID.keys.sorted() == [1, 3])
     }
 
@@ -1265,6 +1386,30 @@ struct Events_TrackerTests {
             htmlURL: nil,
             enrollmentTerm: nil,
             enrollments: nil
+        )
+    }
+
+    private func makeCoursePerson(id: Int, name: String, role: String) -> CoursePerson {
+        CoursePerson(
+            id: id,
+            name: name,
+            sortableName: name,
+            shortName: name,
+            avatarURL: nil,
+            htmlURL: nil,
+            email: nil,
+            loginID: nil,
+            enrollments: [
+                CoursePersonEnrollment(
+                    type: role,
+                    role: role,
+                    roleID: nil,
+                    sectionID: nil,
+                    sectionName: "Lecture",
+                    enrollmentState: "active",
+                    lastActivityAt: nil
+                )
+            ]
         )
     }
 
