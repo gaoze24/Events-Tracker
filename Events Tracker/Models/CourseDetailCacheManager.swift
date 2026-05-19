@@ -27,6 +27,7 @@ struct CourseDetailCacheSnapshot: Codable, Equatable {
     let announcementsByCourseID: [Int: [CourseAnnouncement]]
     let syllabusByCourseID: [Int: CourseSyllabus]
     let peopleByCourseID: [Int: [CoursePerson]]
+    let moduleItemDetailsByKey: [String: CourseModuleItemDetail]
     let courseAccessedAtByCourseID: [Int: Date]
     let savedAt: Date
 
@@ -38,6 +39,7 @@ struct CourseDetailCacheSnapshot: Codable, Equatable {
         case announcementsByCourseID
         case syllabusByCourseID
         case peopleByCourseID
+        case moduleItemDetailsByKey
         case courseAccessedAtByCourseID
         case savedAt
     }
@@ -50,6 +52,7 @@ struct CourseDetailCacheSnapshot: Codable, Equatable {
         announcementsByCourseID: [Int: [CourseAnnouncement]],
         syllabusByCourseID: [Int: CourseSyllabus],
         peopleByCourseID: [Int: [CoursePerson]] = [:],
+        moduleItemDetailsByKey: [String: CourseModuleItemDetail] = [:],
         courseAccessedAtByCourseID: [Int: Date],
         savedAt: Date
     ) {
@@ -60,6 +63,7 @@ struct CourseDetailCacheSnapshot: Codable, Equatable {
         self.announcementsByCourseID = announcementsByCourseID
         self.syllabusByCourseID = syllabusByCourseID
         self.peopleByCourseID = peopleByCourseID
+        self.moduleItemDetailsByKey = moduleItemDetailsByKey
         self.courseAccessedAtByCourseID = courseAccessedAtByCourseID
         self.savedAt = savedAt
     }
@@ -73,6 +77,10 @@ struct CourseDetailCacheSnapshot: Codable, Equatable {
         announcementsByCourseID = try container.decode([Int: [CourseAnnouncement]].self, forKey: .announcementsByCourseID)
         syllabusByCourseID = try container.decode([Int: CourseSyllabus].self, forKey: .syllabusByCourseID)
         peopleByCourseID = try container.decodeIfPresent([Int: [CoursePerson]].self, forKey: .peopleByCourseID) ?? [:]
+        moduleItemDetailsByKey = try container.decodeIfPresent(
+            [String: CourseModuleItemDetail].self,
+            forKey: .moduleItemDetailsByKey
+        ) ?? [:]
         courseAccessedAtByCourseID = try container.decode([Int: Date].self, forKey: .courseAccessedAtByCourseID)
         savedAt = try container.decode(Date.self, forKey: .savedAt)
     }
@@ -86,6 +94,7 @@ struct CourseDetailCacheSnapshot: Codable, Equatable {
         try container.encode(announcementsByCourseID, forKey: .announcementsByCourseID)
         try container.encode(syllabusByCourseID, forKey: .syllabusByCourseID)
         try container.encode(peopleByCourseID, forKey: .peopleByCourseID)
+        try container.encode(moduleItemDetailsByKey, forKey: .moduleItemDetailsByKey)
         try container.encode(courseAccessedAtByCourseID, forKey: .courseAccessedAtByCourseID)
         try container.encode(savedAt, forKey: .savedAt)
     }
@@ -131,6 +140,7 @@ struct CourseDetailCacheSnapshot: Codable, Equatable {
             announcementsByCourseID: announcementsByCourseID.filterKeys(keptCourseIDs),
             syllabusByCourseID: syllabusByCourseID.filterKeys(keptCourseIDs),
             peopleByCourseID: peopleByCourseID.filterKeys(keptCourseIDs),
+            moduleItemDetailsByKey: moduleItemDetailsForKeptCourses(keptCourseIDs),
             courseAccessedAtByCourseID: courseAccessedAtByCourseID.filterKeys(keptCourseIDs),
             savedAt: savedAt
         )
@@ -145,6 +155,7 @@ struct CourseDetailCacheSnapshot: Codable, Equatable {
             announcementsByCourseID: announcementsByCourseID.filterKeys(courseIDs),
             syllabusByCourseID: syllabusByCourseID.filterKeys(courseIDs),
             peopleByCourseID: peopleByCourseID.filterKeys(courseIDs),
+            moduleItemDetailsByKey: moduleItemDetailsForKeptCourses(courseIDs),
             courseAccessedAtByCourseID: courseAccessedAtByCourseID.filterKeys(courseIDs),
             savedAt: savedAt
         )
@@ -157,6 +168,7 @@ struct CourseDetailCacheSnapshot: Codable, Equatable {
             .union(announcementsByCourseID.keys)
             .union(syllabusByCourseID.keys)
             .union(peopleByCourseID.keys)
+            .union(moduleDetailCourseIDs)
     }
 
     private func filesForKeptCourses(_ courseIDs: Set<Int>) -> [Int: [CanvasFile]] {
@@ -166,6 +178,20 @@ struct CourseDetailCacheSnapshot: Codable, Equatable {
             .flatMap { folders in folders.map(\.id) }
 
         return filesByFolderID.filterKeys(Set(keptFolderIDs))
+    }
+
+    private var moduleDetailCourseIDs: Set<Int> {
+        Set(moduleItemDetailsByKey.keys.compactMap { CourseModuleItemDetailKey(rawValue: $0).courseID })
+    }
+
+    private func moduleItemDetailsForKeptCourses(_ courseIDs: Set<Int>) -> [String: CourseModuleItemDetail] {
+        moduleItemDetailsByKey.filter { key, _ in
+            guard let courseID = CourseModuleItemDetailKey(rawValue: key).courseID else {
+                return false
+            }
+
+            return courseIDs.contains(courseID)
+        }
     }
 }
 

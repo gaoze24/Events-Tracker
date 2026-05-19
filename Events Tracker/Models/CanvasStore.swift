@@ -26,6 +26,9 @@ final class CanvasStore: ObservableObject {
     @Published private(set) var loadingCourseSyllabusIDs: Set<Int>
     @Published private(set) var coursePeopleByCourseID: [Int: [CoursePerson]]
     @Published private(set) var loadingCoursePeopleIDs: Set<Int>
+    @Published private(set) var moduleItemDetailsByKey: [String: CourseModuleItemDetail]
+    @Published private(set) var loadingModuleItemDetailKeys: Set<String>
+    @Published private(set) var coursePreferences: CoursePreferencesSnapshot
     @Published private(set) var upcomingEvents: [UpcomingEvent]
     @Published private(set) var missingSubmissions: [MissingSubmission]
     @Published private(set) var profile: UserProfile?
@@ -38,6 +41,7 @@ final class CanvasStore: ObservableObject {
     private let databaseManager: DatabaseManager
     private let networkManager: NetworkManager
     private let detailCacheManager: CourseDetailCacheManager
+    private let preferenceManager: CoursePreferenceManager
     private let cachePolicy: CanvasCachePolicy
     private let reminderService: AssignmentReminderService
     private let relativeFormatter = RelativeDateTimeFormatter()
@@ -50,6 +54,7 @@ final class CanvasStore: ObservableObject {
         databaseManager: DatabaseManager = .shared,
         networkManager: NetworkManager = .shared,
         detailCacheManager: CourseDetailCacheManager = .shared,
+        preferenceManager: CoursePreferenceManager = .shared,
         cachePolicy: CanvasCachePolicy = .default,
         now: @escaping () -> Date = Date.init
     ) {
@@ -57,12 +62,14 @@ final class CanvasStore: ObservableObject {
         self.databaseManager = databaseManager
         self.networkManager = networkManager
         self.detailCacheManager = detailCacheManager
+        self.preferenceManager = preferenceManager
         self.cachePolicy = cachePolicy
         self.now = now
         courseDetailAccessDates = [:]
 
         let savedConfig = configManager.loadConfig()
         config = savedConfig
+        coursePreferences = preferenceManager.loadPreferences()
         reminderService = AssignmentReminderService(
             config: savedConfig,
             networkManager: networkManager,
@@ -86,6 +93,8 @@ final class CanvasStore: ObservableObject {
             loadingCourseSyllabusIDs = []
             coursePeopleByCourseID = [:]
             loadingCoursePeopleIDs = []
+            moduleItemDetailsByKey = [:]
+            loadingModuleItemDetailKeys = []
             upcomingEvents = snapshot.upcomingEvents
             missingSubmissions = snapshot.missingSubmissions
             profile = snapshot.profile
@@ -106,6 +115,8 @@ final class CanvasStore: ObservableObject {
             loadingCourseSyllabusIDs = []
             coursePeopleByCourseID = [:]
             loadingCoursePeopleIDs = []
+            moduleItemDetailsByKey = [:]
+            loadingModuleItemDetailKeys = []
             upcomingEvents = []
             missingSubmissions = []
             profile = nil
@@ -245,9 +256,103 @@ final class CanvasStore: ObservableObject {
         do {
             try databaseManager.clearSnapshot()
             try detailCacheManager.clearCache()
+            try preferenceManager.clearPreferences()
+            coursePreferences = CoursePreferencesSnapshot()
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    func preferredCourses(showingHidden: Bool = false) -> [Course] {
+        let hiddenIDs = coursePreferences.hiddenCourseIDs
+        let visibleCourses = showingHidden ? courses : courses.filter { !hiddenIDs.contains($0.id) }
+        let candidates = visibleCourses.isEmpty && !courses.isEmpty ? courses : visibleCourses
+
+        return candidates.sorted { lhs, rhs in
+            let leftPinned = coursePreferences.pinnedCourseIDs.contains(lhs.id)
+            let rightPinned = coursePreferences.pinnedCourseIDs.contains(rhs.id)
+
+            if leftPinned != rightPinned {
+                return leftPinned
+            }
+
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    func resolvedDefaultCourseID(showingHidden: Bool = false) -> Int? {
+        let preferredCourses = preferredCourses(showingHidden: showingHidden)
+
+        if let defaultCourseID = coursePreferences.defaultCourseID,
+           preferredCourses.contains(where: { $0.id == defaultCourseID }) {
+            return defaultCourseID
+        }
+
+        return preferredCourses.first?.id
+    }
+
+    func resolvedDefaultEventsCourseID(showingHidden: Bool = false) -> Int? {
+        let preferredCourses = preferredCourses(showingHidden: showingHidden)
+
+        if let defaultEventsCourseID = coursePreferences.defaultEventsCourseID,
+           preferredCourses.contains(where: { $0.id == defaultEventsCourseID }) {
+            return defaultEventsCourseID
+        }
+
+        return resolvedDefaultCourseID(showingHidden: showingHidden)
+    }
+
+    func coursePreference(for courseID: Int?) -> SingleCoursePreference {
+        guard let courseID else {
+            return SingleCoursePreference()
+        }
+
+        return coursePreferences.preferencesByCourseID[courseID] ?? SingleCoursePreference()
+    }
+
+    func updateCoursePreference(courseID: Int, _ update: (inout SingleCoursePreference) -> Void) {
+        var preference = coursePreferences.preferencesByCourseID[courseID] ?? SingleCoursePreference()
+        update(&preference)
+        coursePreferences.preferencesByCourseID[courseID] = preference
+        persistCoursePreferences()
+    }
+
+    func togglePinnedCourse(_ courseID: Int) {
+        if coursePreferences.pinnedCourseIDs.contains(courseID) {
+            coursePreferences.pinnedCourseIDs.remove(courseID)
+        } else {
+            coursePreferences.pinnedCourseIDs.insert(courseID)
+        }
+
+        persistCoursePreferences()
+    }
+
+    func toggleHiddenCourse(_ courseID: Int) {
+        if coursePreferences.hiddenCourseIDs.contains(courseID) {
+            coursePreferences.hiddenCourseIDs.remove(courseID)
+        } else {
+            coursePreferences.hiddenCourseIDs.insert(courseID)
+        }
+
+        if coursePreferences.defaultCourseID == courseID && coursePreferences.hiddenCourseIDs.contains(courseID) {
+            coursePreferences.defaultCourseID = nil
+        }
+
+        if coursePreferences.defaultEventsCourseID == courseID && coursePreferences.hiddenCourseIDs.contains(courseID) {
+            coursePreferences.defaultEventsCourseID = nil
+        }
+
+        persistCoursePreferences()
+    }
+
+    func setDefaultCourse(_ courseID: Int?) {
+        coursePreferences.defaultCourseID = courseID
+        persistCoursePreferences()
+    }
+
+    func setDefaultEventsCourse(_ courseID: Int?) {
+        coursePreferences.defaultEventsCourseID = courseID
+        persistCoursePreferences()
     }
 
     func courseName(for courseID: Int?) -> String? {
@@ -328,6 +433,14 @@ final class CanvasStore: ObservableObject {
         }
 
         return coursePeopleByCourseID[courseID] ?? []
+    }
+
+    func moduleItemDetail(for key: CourseModuleItemDetailKey?) -> CourseModuleItemDetail? {
+        guard let key else {
+            return nil
+        }
+
+        return moduleItemDetailsByKey[key.rawValue]
     }
 
     func hasLoadedAssignments(for courseID: Int?) -> Bool {
@@ -514,6 +627,14 @@ final class CanvasStore: ObservableObject {
         }
 
         return loadingCoursePeopleIDs.contains(courseID)
+    }
+
+    func isLoadingModuleItemDetail(_ key: CourseModuleItemDetailKey?) -> Bool {
+        guard let key else {
+            return false
+        }
+
+        return loadingModuleItemDetailKeys.contains(key.rawValue)
     }
 
     func loadCourseFilesIfNeeded(for courseID: Int?) async {
@@ -709,6 +830,77 @@ final class CanvasStore: ObservableObject {
         loadingCoursePeopleIDs.remove(courseID)
     }
 
+    func loadModuleItemDetailIfNeeded(courseID: Int, item: CourseModuleItem) async {
+        guard let key = CourseModuleItemDetailKey.key(courseID: courseID, item: item) else {
+            return
+        }
+
+        if moduleItemDetailsByKey[key.rawValue] != nil {
+            markCourseDetailAccess(courseID)
+            return
+        }
+
+        guard !loadingModuleItemDetailKeys.contains(key.rawValue) else {
+            return
+        }
+
+        await loadModuleItemDetail(courseID: courseID, item: item, key: key)
+    }
+
+    private func loadModuleItemDetail(courseID: Int, item: CourseModuleItem, key: CourseModuleItemDetailKey) async {
+        guard config.isComplete else {
+            errorMessage = CanvasServiceError.incompleteConfiguration.localizedDescription
+            return
+        }
+
+        loadingModuleItemDetailKeys.insert(key.rawValue)
+
+        do {
+            let detail: CourseModuleItemDetail
+
+            switch item.type {
+            case "Quiz":
+                guard let quizID = item.contentID else {
+                    loadingModuleItemDetailKeys.remove(key.rawValue)
+                    return
+                }
+
+                detail = .quiz(try await networkManager.fetchQuizDetail(courseID: courseID, quizID: quizID, using: config))
+            case "Discussion":
+                guard let discussionID = item.contentID else {
+                    loadingModuleItemDetailKeys.remove(key.rawValue)
+                    return
+                }
+
+                detail = .discussion(
+                    try await networkManager.fetchDiscussionDetail(
+                        courseID: courseID,
+                        discussionID: discussionID,
+                        using: config
+                    )
+                )
+            case "Page":
+                guard let pageURL = item.pageURL else {
+                    loadingModuleItemDetailKeys.remove(key.rawValue)
+                    return
+                }
+
+                detail = .page(try await networkManager.fetchPageDetail(courseID: courseID, pageURL: pageURL, using: config))
+            default:
+                loadingModuleItemDetailKeys.remove(key.rawValue)
+                return
+            }
+
+            moduleItemDetailsByKey[key.rawValue] = detail
+            markCourseDetailAccess(courseID)
+            persistCourseDetailCache()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        loadingModuleItemDetailKeys.remove(key.rawValue)
+    }
+
     func startTelegramReminderService() {
         reminderService.start()
     }
@@ -804,6 +996,7 @@ final class CanvasStore: ObservableObject {
             announcementsByCourseID: courseAnnouncementsByCourseID,
             syllabusByCourseID: courseSyllabusByCourseID,
             peopleByCourseID: coursePeopleByCourseID,
+            moduleItemDetailsByKey: moduleItemDetailsByKey,
             courseAccessedAtByCourseID: courseDetailAccessDates,
             savedAt: savedAt
         )
@@ -817,6 +1010,7 @@ final class CanvasStore: ObservableObject {
         courseAnnouncementsByCourseID = snapshot.announcementsByCourseID
         courseSyllabusByCourseID = snapshot.syllabusByCourseID
         coursePeopleByCourseID = snapshot.peopleByCourseID
+        moduleItemDetailsByKey = snapshot.moduleItemDetailsByKey
         courseDetailAccessDates = snapshot.courseAccessedAtByCourseID
     }
 
@@ -836,6 +1030,14 @@ final class CanvasStore: ObservableObject {
         courseDetailAccessDates[courseID] = now()
     }
 
+    private func persistCoursePreferences() {
+        do {
+            try preferenceManager.savePreferences(coursePreferences)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func clearCourseDetailMemoryCache() {
         courseAssignmentsByCourseID = [:]
         loadingCourseAssignmentIDs = []
@@ -851,6 +1053,8 @@ final class CanvasStore: ObservableObject {
         loadingCourseSyllabusIDs = []
         coursePeopleByCourseID = [:]
         loadingCoursePeopleIDs = []
+        moduleItemDetailsByKey = [:]
+        loadingModuleItemDetailKeys = []
         courseDetailAccessDates = [:]
     }
 

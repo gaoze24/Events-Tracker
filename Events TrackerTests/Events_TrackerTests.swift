@@ -588,6 +588,42 @@ struct Events_TrackerTests {
         #expect(!teacher.matchesSearch("biology"))
     }
 
+    @Test func moduleItemDetailKeysAreStable() async throws {
+        #expect(CourseModuleItemDetailKey.quiz(courseID: 42, quizID: 9).rawValue == "quiz:42:9")
+        #expect(CourseModuleItemDetailKey.discussion(courseID: 42, discussionID: 8).rawValue == "discussion:42:8")
+        #expect(CourseModuleItemDetailKey.page(courseID: 42, pageURL: "week-1").rawValue == "page:42:week-1")
+        #expect(CourseModuleItemDetailKey.page(courseID: 42, pageURL: "week-1").courseID == 42)
+        #expect(CourseModuleItemDetailKey.page(courseID: 42, pageURL: "week-1").contentIdentifier == "week-1")
+    }
+
+    @Test func coursePreferenceManagerRoundTripsPreferences() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "EventsTracker-\(UUID().uuidString)-course-preferences.json"
+        )
+        let manager = CoursePreferenceManager(preferencesURL: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        var snapshot = CoursePreferencesSnapshot()
+        snapshot.pinnedCourseIDs = [10]
+        snapshot.hiddenCourseIDs = [20]
+        snapshot.defaultCourseID = 10
+        snapshot.defaultEventsCourseID = 10
+        snapshot.preferencesByCourseID[10] = SingleCoursePreference(
+            workspaceSection: "Modules",
+            modules: CourseWorkspacePreference(searchQuery: "quiz", filter: "Quizzes", sort: "Name")
+        )
+
+        try manager.savePreferences(snapshot)
+        let loaded = manager.loadPreferences()
+
+        #expect(loaded.pinnedCourseIDs == [10])
+        #expect(loaded.hiddenCourseIDs == [20])
+        #expect(loaded.defaultCourseID == 10)
+        #expect(loaded.defaultEventsCourseID == 10)
+        #expect(loaded.preferencesByCourseID[10]?.workspaceSection == "Modules")
+        #expect(loaded.preferencesByCourseID[10]?.modules.searchQuery == "quiz")
+    }
+
     @Test func networkManagerFetchesAnnouncementsWithCourseContext() async throws {
         let session = makeCapturingURLSession { request in
             guard
@@ -719,6 +755,113 @@ struct Events_TrackerTests {
         #expect(people.count == 1)
         #expect(people.first?.primaryRole == .teacher)
         #expect(people.first?.sectionLabel == "Lecture")
+    }
+
+    @Test func networkManagerFetchesQuizDetail() async throws {
+        let session = makeCapturingURLSession { request in
+            guard
+                let url = request.url,
+                let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            else {
+                throw CanvasServiceError.invalidResponse
+            }
+
+            let data = """
+            {
+              "id": 7,
+              "title": "Unit Quiz",
+              "description": "<p>Review chapters 1 and 2.</p>",
+              "html_url": "https://canvas.example.edu/courses/42/quizzes/7",
+              "quiz_type": "assignment",
+              "points_possible": 20,
+              "question_count": 10,
+              "allowed_attempts": 2,
+              "time_limit": 30,
+              "published": true,
+              "locked_for_user": false
+            }
+            """.data(using: .utf8)!
+
+            return (response, data)
+        }
+        let manager = NetworkManager(session: session)
+
+        let quiz = try await manager.fetchQuizDetail(courseID: 42, quizID: 7, using: makeCanvasConfig())
+        let requestURL = try #require(CapturingURLProtocol.lastRequest?.url)
+
+        #expect(requestURL.path == "/api/v1/courses/42/quizzes/7")
+        #expect(quiz.summaryText == "Review chapters 1 and 2.")
+        #expect(quiz.questionCount == 10)
+    }
+
+    @Test func networkManagerFetchesDiscussionDetail() async throws {
+        let session = makeCapturingURLSession { request in
+            guard
+                let url = request.url,
+                let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            else {
+                throw CanvasServiceError.invalidResponse
+            }
+
+            let data = """
+            {
+              "id": 8,
+              "title": "Week 1 Discussion",
+              "message": "<p>Introduce yourself.</p>",
+              "html_url": "https://canvas.example.edu/courses/42/discussion_topics/8",
+              "discussion_subentry_count": 3,
+              "unread_count": 1,
+              "require_initial_post": true,
+              "author": {
+                "id": 2,
+                "display_name": "Dr. Smith"
+              }
+            }
+            """.data(using: .utf8)!
+
+            return (response, data)
+        }
+        let manager = NetworkManager(session: session)
+
+        let discussion = try await manager.fetchDiscussionDetail(courseID: 42, discussionID: 8, using: makeCanvasConfig())
+        let requestURL = try #require(CapturingURLProtocol.lastRequest?.url)
+
+        #expect(requestURL.path == "/api/v1/courses/42/discussion_topics/8")
+        #expect(discussion.summaryText == "Introduce yourself.")
+        #expect(discussion.authorName == "Dr. Smith")
+    }
+
+    @Test func networkManagerFetchesPageDetail() async throws {
+        let session = makeCapturingURLSession { request in
+            guard
+                let url = request.url,
+                let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            else {
+                throw CanvasServiceError.invalidResponse
+            }
+
+            let data = """
+            {
+              "page_id": 9,
+              "url": "week-1",
+              "title": "Week 1",
+              "body": "<h1>Welcome</h1><p>Read the overview.</p>",
+              "html_url": "https://canvas.example.edu/courses/42/pages/week-1",
+              "front_page": false,
+              "published": true
+            }
+            """.data(using: .utf8)!
+
+            return (response, data)
+        }
+        let manager = NetworkManager(session: session)
+
+        let page = try await manager.fetchPageDetail(courseID: 42, pageURL: "week-1", using: makeCanvasConfig())
+        let requestURL = try #require(CapturingURLProtocol.lastRequest?.url)
+
+        #expect(requestURL.path == "/api/v1/courses/42/pages/week-1")
+        #expect(page.summaryText == "Welcome Read the overview.")
+        #expect(page.published == true)
     }
 
     @Test func courseStudentEnrollmentPrefersStudentScores() async throws {

@@ -166,6 +166,8 @@ struct CoursesView: View {
     @State private var announcementSearchQuery = ""
     @State private var announcementFilter: CourseAnnouncementFilter = .all
     @State private var announcementSort: CourseAnnouncementSort = .recent
+    @State private var selectedModuleDetailItem: CourseModuleItem?
+    @State private var showingHiddenCourses = false
 
     private var selectedCourseBinding: Binding<Int?> {
         Binding(
@@ -268,7 +270,9 @@ struct CoursesView: View {
         } else {
             HStack(spacing: 0) {
                 List(selection: selectedCourseBinding) {
-                    ForEach(store.courses) { course in
+                    Toggle("Show Hidden", isOn: $showingHiddenCourses)
+
+                    ForEach(store.preferredCourses(showingHidden: showingHiddenCourses)) { course in
                         CourseListRow(course: course)
                             .tag(Optional(course.id))
                     }
@@ -300,6 +304,21 @@ struct CoursesView: View {
                                 }
 
                                 Spacer()
+
+                                Menu("Course Preferences") {
+                                    Button(store.coursePreferences.pinnedCourseIDs.contains(selectedCourse.id) ? "Unpin Course" : "Pin Course") {
+                                        store.togglePinnedCourse(selectedCourse.id)
+                                    }
+
+                                    Button(store.coursePreferences.hiddenCourseIDs.contains(selectedCourse.id) ? "Unhide Course" : "Hide Course") {
+                                        store.toggleHiddenCourse(selectedCourse.id)
+                                    }
+
+                                    Button("Set as Default Course") {
+                                        store.setDefaultCourse(selectedCourse.id)
+                                        store.selectedCourseID = selectedCourse.id
+                                    }
+                                }
 
                                 if let htmlURL = selectedCourse.htmlURL {
                                     Link("Open in Canvas", destination: htmlURL)
@@ -339,7 +358,10 @@ struct CoursesView: View {
                                     isLoading: isLoadingSelectedCourseModules,
                                     searchQuery: $moduleSearchQuery,
                                     filter: $moduleFilter,
-                                    sort: $moduleSort
+                                    sort: $moduleSort,
+                                    onOpenNativeDetail: { item in
+                                        selectedModuleDetailItem = item
+                                    }
                                 )
                             case .announcements:
                                 CourseAnnouncementsContent(
@@ -411,6 +433,41 @@ struct CoursesView: View {
                             break
                         }
                     }
+                    .onAppear {
+                        applyCoursePreference(for: selectedCourse.id)
+                    }
+                    .onChange(of: selectedSection) { _, newValue in
+                        store.updateCoursePreference(courseID: selectedCourse.id) { preference in
+                            preference.workspaceSection = newValue.rawValue
+                        }
+                    }
+                    .onChange(of: moduleSearchQuery) { _, _ in persistWorkspacePreferences(for: selectedCourse.id) }
+                    .onChange(of: moduleFilter) { _, _ in persistWorkspacePreferences(for: selectedCourse.id) }
+                    .onChange(of: moduleSort) { _, _ in persistWorkspacePreferences(for: selectedCourse.id) }
+                    .onChange(of: fileSearchQuery) { _, _ in persistWorkspacePreferences(for: selectedCourse.id) }
+                    .onChange(of: fileFilter) { _, _ in persistWorkspacePreferences(for: selectedCourse.id) }
+                    .onChange(of: fileSort) { _, _ in persistWorkspacePreferences(for: selectedCourse.id) }
+                    .onChange(of: assignmentSearchQuery) { _, _ in persistWorkspacePreferences(for: selectedCourse.id) }
+                    .onChange(of: assignmentFilter) { _, _ in persistWorkspacePreferences(for: selectedCourse.id) }
+                    .onChange(of: assignmentSort) { _, _ in persistWorkspacePreferences(for: selectedCourse.id) }
+                    .onChange(of: gradeSearchQuery) { _, _ in persistWorkspacePreferences(for: selectedCourse.id) }
+                    .onChange(of: gradeSort) { _, _ in persistWorkspacePreferences(for: selectedCourse.id) }
+                    .onChange(of: announcementSearchQuery) { _, _ in persistWorkspacePreferences(for: selectedCourse.id) }
+                    .onChange(of: announcementFilter) { _, _ in persistWorkspacePreferences(for: selectedCourse.id) }
+                    .onChange(of: announcementSort) { _, _ in persistWorkspacePreferences(for: selectedCourse.id) }
+                    .sheet(item: $selectedModuleDetailItem) { item in
+                        let key = CourseModuleItemDetailKey.key(courseID: selectedCourse.id, item: item)
+
+                        ModuleItemDetailView(
+                            item: item,
+                            detail: store.moduleItemDetail(for: key),
+                            isLoading: store.isLoadingModuleItemDetail(key),
+                            courseName: selectedCourse.name
+                        )
+                        .task(id: key?.rawValue) {
+                            await store.loadModuleItemDetailIfNeeded(courseID: selectedCourse.id, item: item)
+                        }
+                    }
                 } else {
                     SetupPromptView(
                         title: "Select a Course",
@@ -418,6 +475,69 @@ struct CoursesView: View {
                     )
                 }
             }
+            .onAppear {
+                if let defaultCourseID = store.resolvedDefaultCourseID(showingHidden: showingHiddenCourses) {
+                    store.selectedCourseID = defaultCourseID
+                    applyCoursePreference(for: defaultCourseID)
+                }
+            }
+            .onChange(of: store.selectedCourseID) { _, newValue in
+                applyCoursePreference(for: newValue)
+            }
+        }
+    }
+
+    private func applyCoursePreference(for courseID: Int?) {
+        guard let courseID else {
+            return
+        }
+
+        let preference = store.coursePreference(for: courseID)
+        selectedSection = CourseWorkspaceSection(rawValue: preference.workspaceSection) ?? .overview
+        moduleSearchQuery = preference.modules.searchQuery
+        moduleFilter = CourseModuleFilter(rawValue: preference.modules.filter) ?? .all
+        moduleSort = CourseModuleSort(rawValue: preference.modules.sort) ?? .canvasOrder
+        fileSearchQuery = preference.files.searchQuery
+        fileFilter = CourseFileFilter(rawValue: preference.files.filter) ?? .all
+        fileSort = CourseFileSort(rawValue: preference.files.sort) ?? .canvasOrder
+        assignmentSearchQuery = preference.assignments.searchQuery
+        assignmentFilter = CourseAssignmentFilter(rawValue: preference.assignments.filter) ?? .all
+        assignmentSort = CourseAssignmentSort(rawValue: preference.assignments.sort) ?? .dueDate
+        gradeSearchQuery = preference.grades.searchQuery
+        gradeSort = CourseGradeSort(rawValue: preference.grades.sort) ?? .recent
+        announcementSearchQuery = preference.announcements.searchQuery
+        announcementFilter = CourseAnnouncementFilter(rawValue: preference.announcements.filter) ?? .all
+        announcementSort = CourseAnnouncementSort(rawValue: preference.announcements.sort) ?? .recent
+    }
+
+    private func persistWorkspacePreferences(for courseID: Int) {
+        store.updateCoursePreference(courseID: courseID) { preference in
+            preference.workspaceSection = selectedSection.rawValue
+            preference.modules = CourseWorkspacePreference(
+                searchQuery: moduleSearchQuery,
+                filter: moduleFilter.rawValue,
+                sort: moduleSort.rawValue
+            )
+            preference.files = CourseWorkspacePreference(
+                searchQuery: fileSearchQuery,
+                filter: fileFilter.rawValue,
+                sort: fileSort.rawValue
+            )
+            preference.assignments = CourseWorkspacePreference(
+                searchQuery: assignmentSearchQuery,
+                filter: assignmentFilter.rawValue,
+                sort: assignmentSort.rawValue
+            )
+            preference.grades = CourseWorkspacePreference(
+                searchQuery: gradeSearchQuery,
+                filter: "All",
+                sort: gradeSort.rawValue
+            )
+            preference.announcements = CourseWorkspacePreference(
+                searchQuery: announcementSearchQuery,
+                filter: announcementFilter.rawValue,
+                sort: announcementSort.rawValue
+            )
         }
     }
 }
@@ -699,6 +819,7 @@ private struct CourseModulesContent: View {
     @Binding var searchQuery: String
     @Binding var filter: CourseModuleFilter
     @Binding var sort: CourseModuleSort
+    let onOpenNativeDetail: (CourseModuleItem) -> Void
 
     private var visibleModules: [CourseModule] {
         let filteredModules = modules
@@ -763,7 +884,7 @@ private struct CourseModulesContent: View {
         } else {
             VStack(alignment: .leading, spacing: 16) {
                 ForEach(visibleModules) { module in
-                    CourseModuleCard(module: module)
+                    CourseModuleCard(module: module, onOpenNativeDetail: onOpenNativeDetail)
                 }
             }
         }

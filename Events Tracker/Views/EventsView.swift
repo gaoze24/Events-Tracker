@@ -27,7 +27,10 @@ struct EventsView: View {
     private var selectedCourseBinding: Binding<Int?> {
         Binding(
             get: { store.selectedCourseID },
-            set: { store.selectedCourseID = $0 }
+            set: { newValue in
+                store.selectedCourseID = newValue
+                store.setDefaultEventsCourse(newValue)
+            }
         )
     }
 
@@ -82,7 +85,7 @@ struct EventsView: View {
                     Text("All Courses")
                         .tag(nil as Int?)
 
-                    ForEach(store.courses) { course in
+                    ForEach(store.preferredCourses()) { course in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(course.name)
                             if let termName = course.enrollmentTerm?.name, !termName.isEmpty {
@@ -144,6 +147,12 @@ struct EventsView: View {
                 }
                 .padding(24)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+            .onAppear {
+                if store.selectedCourseID == nil,
+                   let defaultCourseID = store.resolvedDefaultEventsCourseID() {
+                    store.selectedCourseID = defaultCourseID
+                }
             }
         }
     }
