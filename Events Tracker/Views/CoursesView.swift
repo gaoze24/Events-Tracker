@@ -1382,7 +1382,7 @@ private struct CourseFilesContent: View {
                     } else {
                         VStack(alignment: .leading, spacing: 0) {
                             ForEach(visibleFiles) { file in
-                                CourseFileRow(file: file)
+                                CourseFileRow(file: file, courseID: course.id)
 
                                 if file.id != visibleFiles.last?.id {
                                     Divider()
@@ -1463,7 +1463,10 @@ private struct CourseFolderRow: View {
 }
 
 private struct CourseFileRow: View {
+    @EnvironmentObject private var store: CanvasStore
+
     let file: CanvasFile
+    let courseID: Int
 
     private var updatedDescription: String? {
         guard let updatedAt = file.updatedAt else {
@@ -1508,9 +1511,23 @@ private struct CourseFileRow: View {
                 PillBadge(text: "Restricted", tint: .orange)
             }
 
-            if let url = file.actionableURL {
-                Link("Open", destination: url)
+            if let record = store.downloadRecord(for: file) {
+                DownloadActions(record: record)
+            } else {
+                HStack(spacing: 8) {
+                    Button("Download") {
+                        Task {
+                            await store.downloadFile(file, courseID: courseID)
+                        }
+                    }
                     .font(.caption.weight(.semibold))
+                    .disabled(file.isUnavailable)
+
+                    if let url = file.actionableURL {
+                        Link("Open", destination: url)
+                            .font(.caption.weight(.semibold))
+                    }
+                }
             }
         }
         .padding(.vertical, 10)

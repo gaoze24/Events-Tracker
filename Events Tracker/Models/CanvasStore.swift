@@ -5,6 +5,7 @@
 //  Created by Codex on 13/4/26.
 //
 
+import AppKit
 import Combine
 import Foundation
 
@@ -29,6 +30,9 @@ final class CanvasStore: ObservableObject {
     @Published private(set) var moduleItemDetailsByKey: [String: CourseModuleItemDetail]
     @Published private(set) var loadingModuleItemDetailKeys: Set<String>
     @Published private(set) var coursePreferences: CoursePreferencesSnapshot
+    @Published private(set) var fileDownloadSnapshot: FileDownloadSnapshot
+    @Published private(set) var downloadingFileIDs: Set<Int>
+    @Published private(set) var recentSearchTerms: [String]
     @Published private(set) var upcomingEvents: [UpcomingEvent]
     @Published private(set) var missingSubmissions: [MissingSubmission]
     @Published private(set) var profile: UserProfile?
@@ -42,6 +46,8 @@ final class CanvasStore: ObservableObject {
     private let networkManager: NetworkManager
     private let detailCacheManager: CourseDetailCacheManager
     private let preferenceManager: CoursePreferenceManager
+    private let fileDownloadManager: FileDownloadManager
+    private let recentSearchManager: RecentSearchManager
     private let cachePolicy: CanvasCachePolicy
     private let reminderService: AssignmentReminderService
     private let relativeFormatter = RelativeDateTimeFormatter()
@@ -55,6 +61,8 @@ final class CanvasStore: ObservableObject {
         networkManager: NetworkManager = .shared,
         detailCacheManager: CourseDetailCacheManager = .shared,
         preferenceManager: CoursePreferenceManager = .shared,
+        fileDownloadManager: FileDownloadManager = .shared,
+        recentSearchManager: RecentSearchManager = .shared,
         cachePolicy: CanvasCachePolicy = .default,
         now: @escaping () -> Date = Date.init
     ) {
@@ -63,6 +71,8 @@ final class CanvasStore: ObservableObject {
         self.networkManager = networkManager
         self.detailCacheManager = detailCacheManager
         self.preferenceManager = preferenceManager
+        self.fileDownloadManager = fileDownloadManager
+        self.recentSearchManager = recentSearchManager
         self.cachePolicy = cachePolicy
         self.now = now
         courseDetailAccessDates = [:]
@@ -70,6 +80,9 @@ final class CanvasStore: ObservableObject {
         let savedConfig = configManager.loadConfig()
         config = savedConfig
         coursePreferences = preferenceManager.loadPreferences()
+        fileDownloadSnapshot = fileDownloadManager.loadSnapshot()
+        downloadingFileIDs = []
+        recentSearchTerms = recentSearchManager.loadTerms()
         reminderService = AssignmentReminderService(
             config: savedConfig,
             networkManager: networkManager,
@@ -257,7 +270,12 @@ final class CanvasStore: ObservableObject {
             try databaseManager.clearSnapshot()
             try detailCacheManager.clearCache()
             try preferenceManager.clearPreferences()
+            try fileDownloadManager.clearAllData()
             coursePreferences = CoursePreferencesSnapshot()
+            fileDownloadSnapshot = FileDownloadSnapshot()
+            downloadingFileIDs = []
+            try recentSearchManager.clearTerms()
+            recentSearchTerms = []
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -409,6 +427,45 @@ final class CanvasStore: ObservableObject {
         }
 
         return courseFilesByFolderID[folderID] ?? []
+    }
+
+    func downloadRecord(for file: CanvasFile) -> FileDownloadRecord? {
+        fileDownloadSnapshot.recordsByFileID[file.id]
+    }
+
+    func isDownloading(_ file: CanvasFile) -> Bool {
+        downloadingFileIDs.contains(file.id)
+    }
+
+    func registerSeenFiles(_ files: [CanvasFile], courseID: Int?) {
+        var snapshot = fileDownloadSnapshot
+        var didChange = false
+
+        for file in files {
+            if var existingRecord = snapshot.recordsByFileID[file.id] {
+                existingRecord.courseID = existingRecord.courseID ?? courseID
+                existingRecord.folderID = existingRecord.folderID ?? file.folderID
+                existingRecord.file = file
+                snapshot.recordsByFileID[file.id] = existingRecord
+            } else {
+                snapshot.recordsByFileID[file.id] = FileDownloadRecord(
+                    fileID: file.id,
+                    courseID: courseID,
+                    folderID: file.folderID,
+                    file: file
+                )
+            }
+
+            didChange = true
+        }
+
+        guard didChange else {
+            return
+        }
+
+        snapshot.updatedAt = now()
+        fileDownloadSnapshot = snapshot
+        persistFileDownloadSnapshot()
     }
 
     func announcements(for courseID: Int?) -> [CourseAnnouncement] {
@@ -709,6 +766,7 @@ final class CanvasStore: ObservableObject {
             let files = try await networkManager.fetchFiles(folderID: folderID, using: config)
             courseFilesByFolderID[folderID] = files
             if let courseID = courseID(containingFolderID: folderID) {
+                registerSeenFiles(files, courseID: courseID)
                 markCourseDetailAccess(courseID)
                 persistCourseDetailCache()
             }
@@ -717,6 +775,146 @@ final class CanvasStore: ObservableObject {
         }
 
         loadingFolderFileIDs.remove(folderID)
+    }
+
+    func downloadFile(_ file: CanvasFile, courseID: Int?) async {
+        guard config.isComplete else {
+            errorMessage = CanvasServiceError.incompleteConfiguration.localizedDescription
+            return
+        }
+
+        guard !file.isUnavailable else {
+            updateDownloadRecord(file: file, courseID: courseID, state: .failed, message: "Canvas marks this file as locked or hidden.")
+            return
+        }
+
+        downloadingFileIDs.insert(file.id)
+        updateDownloadRecord(file: file, courseID: courseID, state: .downloading)
+
+        do {
+            let record = try await fileDownloadManager.download(file: file, courseID: courseID, using: config)
+            fileDownloadSnapshot.recordsByFileID[file.id] = record
+            fileDownloadSnapshot.updatedAt = now()
+            persistFileDownloadSnapshot()
+        } catch {
+            updateDownloadRecord(file: file, courseID: courseID, state: .failed, message: error.localizedDescription)
+        }
+
+        downloadingFileIDs.remove(file.id)
+    }
+
+    func retryDownload(_ record: FileDownloadRecord) async {
+        await downloadFile(record.file, courseID: record.courseID)
+    }
+
+    func removeDownloadedFile(_ record: FileDownloadRecord) {
+        do {
+            try fileDownloadManager.removeDownloadedFile(record)
+            var updatedRecord = record
+            updatedRecord.state = .notDownloaded
+            updatedRecord.localPath = nil
+            updatedRecord.downloadedAt = nil
+            updatedRecord.failureMessage = nil
+            updatedRecord.byteCount = nil
+            fileDownloadSnapshot.recordsByFileID[record.fileID] = updatedRecord
+            fileDownloadSnapshot.updatedAt = now()
+            persistFileDownloadSnapshot()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func clearDownloadedFiles() {
+        do {
+            try fileDownloadManager.clearDownloadedFilesDirectory()
+            var snapshot = fileDownloadSnapshot
+            snapshot.recordsByFileID = snapshot.recordsByFileID.mapValues { record in
+                var updatedRecord = record
+                if updatedRecord.state == .downloaded {
+                    updatedRecord.state = .notDownloaded
+                    updatedRecord.localPath = nil
+                    updatedRecord.downloadedAt = nil
+                    updatedRecord.failureMessage = nil
+                    updatedRecord.byteCount = nil
+                }
+                return updatedRecord
+            }
+            snapshot.updatedAt = now()
+            fileDownloadSnapshot = snapshot
+            persistFileDownloadSnapshot()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func globalSearchResults(for query: String) -> [GlobalSearchResult] {
+        GlobalSearchIndex.results(
+            query: query,
+            courses: courses,
+            upcomingEvents: upcomingEvents,
+            missingSubmissions: missingSubmissions,
+            assignmentsByCourseID: courseAssignmentsByCourseID,
+            modulesByCourseID: courseModulesByCourseID,
+            foldersByCourseID: courseFoldersByCourseID,
+            filesByFolderID: courseFilesByFolderID,
+            announcementsByCourseID: courseAnnouncementsByCourseID,
+            syllabusByCourseID: courseSyllabusByCourseID,
+            peopleByCourseID: coursePeopleByCourseID,
+            moduleItemDetailsByKey: moduleItemDetailsByKey
+        )
+    }
+
+    func rememberSearchTerm(_ term: String) {
+        let trimmedTerm = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTerm.isEmpty else {
+            return
+        }
+
+        recentSearchTerms.removeAll { $0.localizedCaseInsensitiveCompare(trimmedTerm) == .orderedSame }
+        recentSearchTerms.insert(trimmedTerm, at: 0)
+        recentSearchTerms = Array(recentSearchTerms.prefix(10))
+        persistRecentSearchTerms()
+    }
+
+    func clearRecentSearchTerms() {
+        recentSearchTerms = []
+        do {
+            try recentSearchManager.clearTerms()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func openDownloadedFile(_ record: FileDownloadRecord) {
+        guard let localPath = record.localPath else {
+            errorMessage = FileDownloadError.missingLocalFile.localizedDescription
+            return
+        }
+
+        let url = URL(fileURLWithPath: localPath)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            markDownloadedFileMissing(record)
+            errorMessage = FileDownloadError.missingLocalFile.localizedDescription
+            return
+        }
+
+        NSWorkspace.shared.open(url)
+    }
+
+    func revealDownloadedFile(_ record: FileDownloadRecord) {
+        guard let localPath = record.localPath else {
+            errorMessage = FileDownloadError.missingLocalFile.localizedDescription
+            return
+        }
+
+        let url = URL(fileURLWithPath: localPath)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            markDownloadedFileMissing(record)
+            errorMessage = FileDownloadError.missingLocalFile.localizedDescription
+            return
+        }
+
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     func loadAnnouncementsIfNeeded(for courseID: Int?) async {
@@ -1033,6 +1231,56 @@ final class CanvasStore: ObservableObject {
     private func persistCoursePreferences() {
         do {
             try preferenceManager.savePreferences(coursePreferences)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func updateDownloadRecord(
+        file: CanvasFile,
+        courseID: Int?,
+        state: FileDownloadState,
+        message: String? = nil
+    ) {
+        var record = fileDownloadSnapshot.recordsByFileID[file.id] ?? FileDownloadRecord(
+            fileID: file.id,
+            courseID: courseID,
+            folderID: file.folderID,
+            file: file
+        )
+        record.courseID = record.courseID ?? courseID
+        record.folderID = record.folderID ?? file.folderID
+        record.file = file
+        record.state = state
+        record.failureMessage = message
+        fileDownloadSnapshot.recordsByFileID[file.id] = record
+        fileDownloadSnapshot.updatedAt = now()
+        persistFileDownloadSnapshot()
+    }
+
+    private func markDownloadedFileMissing(_ record: FileDownloadRecord) {
+        var updatedRecord = record
+        updatedRecord.state = .failed
+        updatedRecord.localPath = nil
+        updatedRecord.downloadedAt = nil
+        updatedRecord.byteCount = nil
+        updatedRecord.failureMessage = FileDownloadError.missingLocalFile.localizedDescription
+        fileDownloadSnapshot.recordsByFileID[record.fileID] = updatedRecord
+        fileDownloadSnapshot.updatedAt = now()
+        persistFileDownloadSnapshot()
+    }
+
+    private func persistFileDownloadSnapshot() {
+        do {
+            try fileDownloadManager.saveSnapshot(fileDownloadSnapshot)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func persistRecentSearchTerms() {
+        do {
+            try recentSearchManager.saveTerms(recentSearchTerms)
         } catch {
             errorMessage = error.localizedDescription
         }

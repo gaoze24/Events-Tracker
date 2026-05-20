@@ -863,6 +863,211 @@ struct CanvasFile: Codable, Identifiable, Hashable {
     }
 }
 
+enum FileDownloadState: String, Codable, CaseIterable, Hashable, Identifiable {
+    case notDownloaded
+    case downloading
+    case downloaded
+    case failed
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .notDownloaded:
+            return "Not Downloaded"
+        case .downloading:
+            return "Downloading"
+        case .downloaded:
+            return "Downloaded"
+        case .failed:
+            return "Failed"
+        }
+    }
+}
+
+struct FileDownloadRecord: Codable, Identifiable, Hashable {
+    let fileID: Int
+    var courseID: Int?
+    var folderID: Int?
+    var file: CanvasFile
+    var state: FileDownloadState
+    var localPath: String?
+    var downloadedAt: Date?
+    var failureMessage: String?
+    var byteCount: Int?
+
+    var id: Int { fileID }
+
+    init(
+        fileID: Int,
+        courseID: Int?,
+        folderID: Int?,
+        file: CanvasFile,
+        state: FileDownloadState = .notDownloaded,
+        localPath: String? = nil,
+        downloadedAt: Date? = nil,
+        failureMessage: String? = nil,
+        byteCount: Int? = nil
+    ) {
+        self.fileID = fileID
+        self.courseID = courseID
+        self.folderID = folderID
+        self.file = file
+        self.state = state
+        self.localPath = localPath
+        self.downloadedAt = downloadedAt
+        self.failureMessage = failureMessage
+        self.byteCount = byteCount
+    }
+
+    var isDownloaded: Bool {
+        state == .downloaded && localPath != nil
+    }
+
+    var typeLabel: String {
+        guard let contentType = file.contentType?.trimmingCharacters(in: .whitespacesAndNewlines), !contentType.isEmpty else {
+            return "Unknown"
+        }
+
+        if contentType.contains("pdf") {
+            return "PDF"
+        }
+
+        if contentType.hasPrefix("image/") {
+            return "Image"
+        }
+
+        if contentType.hasPrefix("video/") {
+            return "Video"
+        }
+
+        if contentType.hasPrefix("audio/") {
+            return "Audio"
+        }
+
+        if contentType.contains("word") || contentType.contains("document") {
+            return "Document"
+        }
+
+        if contentType.contains("spreadsheet") || contentType.contains("excel") {
+            return "Spreadsheet"
+        }
+
+        if contentType.contains("presentation") || contentType.contains("powerpoint") {
+            return "Presentation"
+        }
+
+        return contentType
+    }
+
+    var displaySize: String? {
+        let size = byteCount ?? file.size
+        guard let size else {
+            return nil
+        }
+
+        return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
+    }
+
+    func matchesSearch(_ query: String, courseName: String?) -> Bool {
+        workspaceSearchMatches(query, in: file.name, file.filename, file.contentType, typeLabel, courseName, failureMessage)
+    }
+
+    static func safeFilename(for file: CanvasFile) -> String {
+        let fallbackName = "file-\(file.id)"
+        let rawName = file.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? fallbackName : file.name
+        let invalidCharacters = CharacterSet(charactersIn: "/\\:?%*|\"<>")
+            .union(.newlines)
+            .union(.controlCharacters)
+        let components = rawName.components(separatedBy: invalidCharacters)
+        let sanitized = components
+            .joined(separator: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return sanitized.isEmpty ? fallbackName : sanitized
+    }
+}
+
+struct FileDownloadSnapshot: Codable, Equatable {
+    var recordsByFileID: [Int: FileDownloadRecord]
+    var updatedAt: Date?
+
+    init(recordsByFileID: [Int: FileDownloadRecord] = [:], updatedAt: Date? = nil) {
+        self.recordsByFileID = recordsByFileID
+        self.updatedAt = updatedAt
+    }
+
+    var records: [FileDownloadRecord] {
+        recordsByFileID.values.sorted {
+            $0.file.name.localizedCaseInsensitiveCompare($1.file.name) == .orderedAscending
+        }
+    }
+
+    var downloadedRecords: [FileDownloadRecord] {
+        records.filter { $0.state == .downloaded }
+    }
+
+    var downloadedByteCount: Int {
+        downloadedRecords.reduce(0) { partialResult, record in
+            partialResult + (record.byteCount ?? record.file.size ?? 0)
+        }
+    }
+}
+
+enum GlobalSearchResultKind: String, Codable, CaseIterable, Hashable, Identifiable {
+    case course = "Course"
+    case assignment = "Assignment"
+    case event = "Event"
+    case missing = "Missing"
+    case module = "Module"
+    case moduleItem = "Module Item"
+    case file = "File"
+    case folder = "Folder"
+    case announcement = "Announcement"
+    case syllabus = "Syllabus"
+    case person = "Person"
+    case detail = "Detail"
+
+    var id: String { rawValue }
+
+    var systemImage: String {
+        switch self {
+        case .course: return "books.vertical"
+        case .assignment: return "checklist"
+        case .event: return "calendar"
+        case .missing: return "exclamationmark.circle"
+        case .module: return "rectangle.stack"
+        case .moduleItem: return "doc.text"
+        case .file: return "doc"
+        case .folder: return "folder"
+        case .announcement: return "megaphone"
+        case .syllabus: return "doc.richtext"
+        case .person: return "person"
+        case .detail: return "doc.text.magnifyingglass"
+        }
+    }
+}
+
+struct GlobalSearchResult: Identifiable, Hashable {
+    let id: String
+    let kind: GlobalSearchResultKind
+    let title: String
+    let subtitle: String?
+    let courseID: Int?
+    let courseName: String?
+    let url: URL?
+    let searchableText: String
+    let score: Int
+
+    func matchesKind(_ kind: GlobalSearchResultKind?) -> Bool {
+        guard let kind else {
+            return true
+        }
+
+        return self.kind == kind
+    }
+}
+
 struct CourseAnnouncement: Codable, Identifiable, Hashable {
     let id: Int
     let title: String
