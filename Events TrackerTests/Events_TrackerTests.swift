@@ -1412,6 +1412,227 @@ struct Events_TrackerTests {
         #expect(!upcoming.isOverdue(referenceDate: referenceDate))
     }
 
+    @Test func fileDownloadRecordSanitizesUnsafeFilenames() async throws {
+        let file = makeCanvasFile(id: 10, name: " Week 1 / Intro: Notes?.pdf ")
+
+        #expect(FileDownloadRecord.safeFilename(for: file) == "Week 1 - Intro- Notes-.pdf")
+    }
+
+    @Test func fileDownloadManagerRoundTripsSnapshotAndClearsCorruptJSON() async throws {
+        let metadataURL = makeFileDownloadMetadataTempURL()
+        let downloadsURL = makeDownloadsTempDirectoryURL()
+        let fileManager = FileManager.default
+        try? fileManager.removeItem(at: metadataURL)
+        try? fileManager.removeItem(at: downloadsURL)
+        defer {
+            try? fileManager.removeItem(at: metadataURL)
+            try? fileManager.removeItem(at: downloadsURL)
+        }
+
+        let manager = FileDownloadManager(metadataURL: metadataURL, downloadsDirectory: downloadsURL)
+        let file = makeCanvasFile(id: 1, name: "Slides.pdf")
+        let localURL = manager.localURL(for: file, courseID: 2)
+        try fileManager.createDirectory(at: localURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("slides".utf8).write(to: localURL)
+        let snapshot = FileDownloadSnapshot(
+            recordsByFileID: [
+                file.id: FileDownloadRecord(
+                    fileID: file.id,
+                    courseID: 2,
+                    folderID: 3,
+                    file: file,
+                    state: .downloaded,
+                    localPath: localURL.path,
+                    downloadedAt: Date(timeIntervalSince1970: 1_710_000_001),
+                    byteCount: 6
+                )
+            ],
+            updatedAt: Date(timeIntervalSince1970: 1_710_000_000)
+        )
+
+        try manager.saveSnapshot(snapshot)
+
+        #expect(manager.loadSnapshot() == snapshot)
+
+        try Data("{ nope".utf8).write(to: metadataURL, options: .atomic)
+
+        #expect(manager.loadSnapshot().recordsByFileID.isEmpty)
+    }
+
+    @Test func fileDownloadManagerDownloadsWithBearerToken() async throws {
+        let metadataURL = makeFileDownloadMetadataTempURL()
+        let downloadsURL = makeDownloadsTempDirectoryURL()
+        let fileManager = FileManager.default
+        try? fileManager.removeItem(at: metadataURL)
+        try? fileManager.removeItem(at: downloadsURL)
+        defer {
+            try? fileManager.removeItem(at: metadataURL)
+            try? fileManager.removeItem(at: downloadsURL)
+        }
+
+        let session = makeCapturingURLSession { request in
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer token")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data("hello".utf8))
+        }
+        let manager = FileDownloadManager(metadataURL: metadataURL, downloadsDirectory: downloadsURL, session: session)
+        let file = makeCanvasFile(
+            id: 5,
+            name: "Reading.pdf",
+            url: URL(string: "https://canvas.example.edu/files/5/download")
+        )
+
+        let record = try await manager.download(file: file, courseID: 10, using: makeCanvasConfig())
+
+        #expect(record.state == .downloaded)
+        #expect(record.byteCount == 5)
+        #expect(CapturingURLProtocol.lastRequest?.url?.absoluteString == "https://canvas.example.edu/files/5/download")
+        #expect(record.localPath.map { fileManager.fileExists(atPath: $0) } == true)
+    }
+
+    @Test func fileDownloadManagerDoesNotDownloadCanvasHTMLFallback() async throws {
+        let manager = FileDownloadManager(
+            metadataURL: makeFileDownloadMetadataTempURL(),
+            downloadsDirectory: makeDownloadsTempDirectoryURL()
+        )
+        let file = CanvasFile(
+            id: 12,
+            uuid: nil,
+            folderID: nil,
+            displayName: "Preview Only",
+            filename: "preview.html",
+            contentType: "text/html",
+            url: nil,
+            htmlURL: URL(string: "https://canvas.example.edu/files/12"),
+            size: nil,
+            createdAt: nil,
+            updatedAt: nil,
+            unlockAt: nil,
+            locked: nil,
+            hidden: nil,
+            lockedForUser: nil,
+            hiddenForUser: nil,
+            thumbnailURL: nil
+        )
+
+        do {
+            _ = try await manager.download(file: file, courseID: 1, using: makeCanvasConfig())
+            Issue.record("Expected missing direct download URL to throw")
+        } catch FileDownloadError.missingDownloadURL {
+            // Expected path.
+        } catch {
+            Issue.record("Expected missing direct download URL, got \(error)")
+        }
+    }
+
+    @Test func fileDownloadManagerReconcilesInterruptedAndMissingLocalRecords() async throws {
+        let file = makeCanvasFile(id: 20, name: "Reading.pdf")
+        let interrupted = FileDownloadRecord(
+            fileID: file.id,
+            courseID: 1,
+            folderID: nil,
+            file: file,
+            state: .downloading
+        )
+        let missing = FileDownloadRecord(
+            fileID: 21,
+            courseID: 1,
+            folderID: nil,
+            file: makeCanvasFile(id: 21, name: "Missing.pdf"),
+            state: .downloaded,
+            localPath: "/tmp/does-not-exist-\(UUID().uuidString).pdf",
+            downloadedAt: Date(),
+            failureMessage: nil,
+            byteCount: 100
+        )
+        let manager = FileDownloadManager(
+            metadataURL: makeFileDownloadMetadataTempURL(),
+            downloadsDirectory: makeDownloadsTempDirectoryURL()
+        )
+
+        let snapshot = manager.reconciledSnapshot(
+            FileDownloadSnapshot(recordsByFileID: [
+                interrupted.fileID: interrupted,
+                missing.fileID: missing
+            ])
+        )
+
+        #expect(snapshot.recordsByFileID[interrupted.fileID]?.state == .failed)
+        #expect(snapshot.recordsByFileID[missing.fileID]?.state == .failed)
+        #expect(snapshot.recordsByFileID[missing.fileID]?.localPath == nil)
+    }
+
+    @Test func clearingDownloadedDirectoryPreservesDownloadMetadata() async throws {
+        let metadataURL = makeFileDownloadMetadataTempURL()
+        let downloadsURL = makeDownloadsTempDirectoryURL()
+        let fileManager = FileManager.default
+        try? fileManager.removeItem(at: metadataURL)
+        try? fileManager.removeItem(at: downloadsURL)
+        defer {
+            try? fileManager.removeItem(at: metadataURL)
+            try? fileManager.removeItem(at: downloadsURL)
+        }
+
+        let manager = FileDownloadManager(metadataURL: metadataURL, downloadsDirectory: downloadsURL)
+        let file = makeCanvasFile(id: 22, name: "Known.pdf")
+        let snapshot = FileDownloadSnapshot(recordsByFileID: [
+            file.id: FileDownloadRecord(fileID: file.id, courseID: 1, folderID: nil, file: file)
+        ])
+        try manager.saveSnapshot(snapshot)
+
+        try manager.clearDownloadedFilesDirectory()
+
+        #expect(manager.loadSnapshot().recordsByFileID[file.id]?.file.name == "Known.pdf")
+    }
+
+    @Test func globalSearchRanksTitleMatchesBeforeMetadataMatches() async throws {
+        let course = makeCourse(id: 10, name: "Biology")
+        let results = GlobalSearchIndex.results(
+            query: "biology",
+            courses: [course],
+            upcomingEvents: [],
+            missingSubmissions: [],
+            assignmentsByCourseID: [
+                10: [
+                    makeCourseAssignment(id: 1, name: "Biology Lab", dueAt: nil, courseID: 10),
+                    makeCourseAssignment(id: 2, name: "Weekly Notes", dueAt: nil, courseID: 10)
+                ]
+            ],
+            modulesByCourseID: [:],
+            foldersByCourseID: [:],
+            filesByFolderID: [:],
+            announcementsByCourseID: [:],
+            syllabusByCourseID: [:],
+            peopleByCourseID: [:],
+            moduleItemDetailsByKey: [:]
+        )
+
+        #expect(results.first?.title == "Biology")
+        #expect(results.contains { $0.kind == .assignment && $0.title == "Biology Lab" })
+        #expect(results.contains { $0.title == "Weekly Notes" })
+    }
+
+    @Test func recentSearchManagerSavesCapsAndClearsTerms() async throws {
+        let storageURL = makeRecentSearchTempURL()
+        let fileManager = FileManager.default
+        try? fileManager.removeItem(at: storageURL)
+        defer { try? fileManager.removeItem(at: storageURL) }
+
+        let manager = RecentSearchManager(storageURL: storageURL)
+        try manager.saveTerms((1...12).map { "term-\($0)" })
+
+        #expect(manager.loadTerms().count == 10)
+
+        try manager.clearTerms()
+
+        #expect(manager.loadTerms().isEmpty)
+    }
+
     private func makeUpcomingEvent(date: Date) -> UpcomingEvent {
         UpcomingEvent(
             id: UUID().uuidString,
@@ -1570,15 +1791,20 @@ struct Events_TrackerTests {
         )
     }
 
-    private func makeCanvasFile(id: Int, name: String) -> CanvasFile {
+    private func makeCanvasFile(
+        id: Int,
+        name: String,
+        folderID: Int? = nil,
+        url: URL? = nil
+    ) -> CanvasFile {
         CanvasFile(
             id: id,
             uuid: nil,
-            folderID: nil,
+            folderID: folderID,
             displayName: name,
             filename: name,
             contentType: "application/pdf",
-            url: nil,
+            url: url,
             htmlURL: nil,
             size: 1_024,
             createdAt: nil,
@@ -1589,6 +1815,25 @@ struct Events_TrackerTests {
             lockedForUser: nil,
             hiddenForUser: nil,
             thumbnailURL: nil
+        )
+    }
+
+    private func makeFileDownloadMetadataTempURL() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent(
+            "EventsTracker-\(UUID().uuidString)-file-downloads.json"
+        )
+    }
+
+    private func makeDownloadsTempDirectoryURL() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent(
+            "EventsTracker-\(UUID().uuidString)-downloads",
+            isDirectory: true
+        )
+    }
+
+    private func makeRecentSearchTempURL() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent(
+            "EventsTracker-\(UUID().uuidString)-recent-searches.json"
         )
     }
 

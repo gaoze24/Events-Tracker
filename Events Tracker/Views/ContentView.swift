@@ -9,9 +9,11 @@ import SwiftUI
 
 private enum AppSection: String, CaseIterable, Identifiable {
     case dashboard = "Dashboard"
+    case search = "Search"
     case assignments = "Assignments"
     case courses = "Courses"
     case events = "Events"
+    case downloads = "Downloads"
     case profile = "Profile"
     case settings = "Settings"
 
@@ -21,12 +23,16 @@ private enum AppSection: String, CaseIterable, Identifiable {
         switch self {
         case .dashboard:
             return "rectangle.3.group"
+        case .search:
+            return "magnifyingglass"
         case .assignments:
             return "checklist"
         case .courses:
             return "books.vertical"
         case .events:
             return "calendar"
+        case .downloads:
+            return "arrow.down.circle"
         case .profile:
             return "person.crop.circle"
         case .settings:
@@ -65,12 +71,18 @@ struct ContentView: View {
                     switch selectedSection {
                     case .dashboard:
                         HomeView()
+                    case .search:
+                        GlobalSearchView {
+                            selectedSection = .courses
+                        }
                     case .assignments:
                         AssignmentsView()
                     case .courses:
                         CoursesView()
                     case .events:
                         EventsView()
+                    case .downloads:
+                        DownloadsView()
                     case .profile:
                         ProfileView()
                     case .settings:
