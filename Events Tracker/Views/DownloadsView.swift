@@ -36,6 +36,7 @@ struct DownloadsView: View {
     @State private var statusFilter: DownloadStatusFilter = .all
     @State private var selectedCourseID: Int?
     @State private var selectedType = "All"
+    @State private var previewItem: QuickLookPreviewItem?
 
     private var records: [FileDownloadRecord] {
         store.fileDownloadSnapshot.records
@@ -105,7 +106,7 @@ struct DownloadsView: View {
                 } else {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(visibleRecords) { record in
-                            DownloadRecordRow(record: record)
+                            DownloadRecordRow(record: record, onPreview: previewRecord)
 
                             if record.id != visibleRecords.last?.id {
                                 Divider()
@@ -118,6 +119,9 @@ struct DownloadsView: View {
                 }
             }
             .padding(24)
+        }
+        .sheet(item: $previewItem) { item in
+            QuickLookPreviewSheet(item: item)
         }
     }
 
@@ -157,12 +161,21 @@ struct DownloadsView: View {
             Spacer()
         }
     }
+
+    private func previewRecord(_ record: FileDownloadRecord) {
+        guard let url = store.quickLookURL(for: record) else {
+            return
+        }
+
+        previewItem = QuickLookPreviewItem(url: url, title: record.file.name)
+    }
 }
 
 private struct DownloadRecordRow: View {
     @EnvironmentObject private var store: CanvasStore
 
     let record: FileDownloadRecord
+    let onPreview: (FileDownloadRecord) -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -200,7 +213,7 @@ private struct DownloadRecordRow: View {
 
             Spacer()
 
-            DownloadActions(record: record)
+            DownloadActions(record: record, onPreview: onPreview)
         }
         .padding(.vertical, 10)
     }
@@ -223,11 +236,22 @@ struct DownloadActions: View {
     @EnvironmentObject private var store: CanvasStore
 
     let record: FileDownloadRecord
+    let onPreview: (FileDownloadRecord) -> Void
+
+    init(record: FileDownloadRecord, onPreview: @escaping (FileDownloadRecord) -> Void = { _ in }) {
+        self.record = record
+        self.onPreview = onPreview
+    }
 
     var body: some View {
         HStack(spacing: 8) {
             if record.state == .downloaded {
                 Button("Preview") {
+                    onPreview(record)
+                }
+                .font(.caption.weight(.semibold))
+
+                Button("Open") {
                     store.openDownloadedFile(record)
                 }
                 .font(.caption.weight(.semibold))

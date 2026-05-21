@@ -1468,6 +1468,8 @@ private struct CourseFileRow: View {
     let file: CanvasFile
     let courseID: Int
 
+    @State private var previewItem: QuickLookPreviewItem?
+
     private var updatedDescription: String? {
         guard let updatedAt = file.updatedAt else {
             return nil
@@ -1512,7 +1514,7 @@ private struct CourseFileRow: View {
             }
 
             if let record = store.downloadRecord(for: file) {
-                DownloadActions(record: record)
+                DownloadActions(record: record, onPreview: previewRecord)
             } else {
                 HStack(spacing: 8) {
                     Button("Download") {
@@ -1531,6 +1533,17 @@ private struct CourseFileRow: View {
             }
         }
         .padding(.vertical, 10)
+        .sheet(item: $previewItem) { item in
+            QuickLookPreviewSheet(item: item)
+        }
+    }
+
+    private func previewRecord(_ record: FileDownloadRecord) {
+        guard let url = store.quickLookURL(for: record) else {
+            return
+        }
+
+        previewItem = QuickLookPreviewItem(url: url, title: record.file.name)
     }
 }
 
