@@ -64,6 +64,7 @@ struct SettingsView: View {
     @State private var telegramChatSelection = TelegramChatSelectionState()
     @State private var isLoadingTelegramChats = false
     @State private var isSendingTelegramTest = false
+    @State private var downloadCacheLimit: DownloadCacheLimitPreset = .unlimited
     @State private var statusMessage: String?
     @State private var didPopulateFields = false
 
@@ -161,6 +162,16 @@ struct SettingsView: View {
 
                     Section("Local Data") {
                         Text("Changing the Canvas URL or token clears the cached dashboard so data from different accounts never mixes together.")
+
+                        Picker("Download Cache Limit", selection: $downloadCacheLimit) {
+                            ForEach(DownloadCacheLimitPreset.allCases) { preset in
+                                Text(preset.label)
+                                    .tag(preset)
+                            }
+                        }
+
+                        Text("This limit applies to downloaded file contents. Course metadata, preferences, and credentials are not counted.")
+                            .foregroundStyle(.secondary)
                     }
 
                     Section {
@@ -222,6 +233,7 @@ struct SettingsView: View {
         telegramReminderWindowHours = telegramConfig.normalizedReminderWindowHours
         telegramCheckIntervalMinutes = telegramConfig.normalizedCheckIntervalMinutes
         telegramRepeatIntervalHours = telegramConfig.normalizedRepeatIntervalHours
+        downloadCacheLimit = store.config.downloadCacheLimit
         didPopulateFields = true
     }
 
@@ -245,7 +257,8 @@ struct SettingsView: View {
                 baseURL: baseURL,
                 token: token,
                 lookaheadDays: lookaheadDays,
-                telegramReminders: telegramConfig
+                telegramReminders: telegramConfig,
+                downloadCacheLimit: downloadCacheLimit
             )
 
             statusMessage = credentialsChanged

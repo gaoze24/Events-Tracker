@@ -331,6 +331,7 @@ struct Events_TrackerTests {
         #expect(config.normalizedBaseURL == "https://canvas.example.edu")
         #expect(config.trimmedToken == "abc123")
         #expect(config.telegramReminders == TelegramReminderConfig())
+        #expect(config.downloadCacheLimit == .unlimited)
     }
 
     @Test func canvasConfigDecodesPartialNestedTelegramSettingsWithDefaults() async throws {
@@ -354,6 +355,13 @@ struct Events_TrackerTests {
         #expect(config.telegramReminders.reminderWindowHours == 24)
         #expect(config.telegramReminders.checkIntervalMinutes == 30)
         #expect(config.telegramReminders.repeatIntervalHours == 24)
+    }
+
+    @Test func downloadCacheLimitPresetsExposeByteCapsAndLabels() async throws {
+        #expect(DownloadCacheLimitPreset.unlimited.byteLimit == nil)
+        #expect(DownloadCacheLimitPreset.oneGB.byteLimit == 1_073_741_824)
+        #expect(DownloadCacheLimitPreset.twoGB.byteLimit == 2_147_483_648)
+        #expect(DownloadCacheLimitPreset.oneGB.label == "1 GB")
     }
 
     @Test func canvasConfigManagerMigratesSensitiveTokensOutOfJSON() async throws {
@@ -640,6 +648,8 @@ struct Events_TrackerTests {
         var snapshot = CoursePreferencesSnapshot()
         snapshot.pinnedCourseIDs = [10]
         snapshot.hiddenCourseIDs = [20]
+        snapshot.offlinePriorityCourseIDs = [10, 30]
+        snapshot.showsHiddenCourses = true
         snapshot.defaultCourseID = 10
         snapshot.defaultEventsCourseID = 10
         snapshot.preferencesByCourseID[10] = SingleCoursePreference(
@@ -652,10 +662,503 @@ struct Events_TrackerTests {
 
         #expect(loaded.pinnedCourseIDs == [10])
         #expect(loaded.hiddenCourseIDs == [20])
+        #expect(loaded.offlinePriorityCourseIDs == [10, 30])
+        #expect(loaded.showsHiddenCourses)
         #expect(loaded.defaultCourseID == 10)
         #expect(loaded.defaultEventsCourseID == 10)
         #expect(loaded.preferencesByCourseID[10]?.workspaceSection == "Modules")
         #expect(loaded.preferencesByCourseID[10]?.modules.searchQuery == "quiz")
+    }
+
+    @Test func coursePreferencesSnapshotDecodesLegacyPreferencesWithEnhancedDefaults() async throws {
+        let data = """
+        {
+          "pinnedCourseIDs" : [10],
+          "hiddenCourseIDs" : [20],
+          "defaultCourseID" : 10,
+          "defaultEventsCourseID" : 10,
+          "preferencesByCourseID" : {}
+        }
+        """.data(using: .utf8)!
+
+        let snapshot = try JSONDecoder().decode(CoursePreferencesSnapshot.self, from: data)
+
+        #expect(snapshot.pinnedCourseIDs == [10])
+        #expect(snapshot.hiddenCourseIDs == [20])
+        #expect(snapshot.offlinePriorityCourseIDs.isEmpty)
+        #expect(!snapshot.showsHiddenCourses)
+    }
+
+    @MainActor
+    @Test func canvasStorePruningKeepsOfflinePriorityCoursesInMemory() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let dashboardCacheURL = makeDashboardCacheTempURL()
+        let courseDetailCacheURL = makeCourseDetailCacheTempURL()
+        let preferencesURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "EventsTracker-\(UUID().uuidString)-course-preferences.json"
+        )
+        let fileManager = FileManager.default
+        [configURL, dashboardCacheURL, courseDetailCacheURL, preferencesURL].forEach { url in
+            try? fileManager.removeItem(at: url)
+        }
+        defer {
+            [configURL, dashboardCacheURL, courseDetailCacheURL, preferencesURL].forEach { url in
+                try? fileManager.removeItem(at: url)
+            }
+        }
+
+        var currentDate = Date(timeIntervalSince1970: 1_710_000_000)
+        let databaseManager = DatabaseManager(cacheURL: dashboardCacheURL)
+        try databaseManager.saveSnapshot(
+            CanvasSnapshot(
+                courses: [
+                    makeCourse(id: 1, name: "Selected"),
+                    makeCourse(id: 2, name: "Offline Priority")
+                ],
+                upcomingEvents: [],
+                missingSubmissions: [],
+                profile: nil,
+                syncedAt: currentDate
+            )
+        )
+
+        let detailCacheManager = CourseDetailCacheManager(cacheURL: courseDetailCacheURL)
+        try detailCacheManager.saveCache(
+            CourseDetailCacheSnapshot(
+                assignmentsByCourseID: [
+                    1: [makeCourseAssignment(id: 1, name: "Selected Lab", dueAt: currentDate, courseID: 1)],
+                    2: [makeCourseAssignment(id: 2, name: "Offline Lab", dueAt: currentDate, courseID: 2)]
+                ],
+                modulesByCourseID: [:],
+                foldersByCourseID: [:],
+                filesByFolderID: [:],
+                announcementsByCourseID: [:],
+                syllabusByCourseID: [:],
+                courseAccessedAtByCourseID: [
+                    1: currentDate,
+                    2: currentDate
+                ],
+                savedAt: currentDate
+            )
+        )
+
+        let preferenceManager = CoursePreferenceManager(preferencesURL: preferencesURL)
+        try preferenceManager.savePreferences(
+            CoursePreferencesSnapshot(offlinePriorityCourseIDs: [2])
+        )
+
+        let store = CanvasStore(
+            configManager: CanvasConfigManager(configURL: configURL, tokenStore: InMemoryCanvasTokenStore()),
+            databaseManager: databaseManager,
+            networkManager: .shared,
+            detailCacheManager: detailCacheManager,
+            preferenceManager: preferenceManager,
+            cachePolicy: CanvasCachePolicy(
+                memoryTimeToLive: 60,
+                diskTimeToLive: 24 * 60 * 60,
+                maintenanceInterval: 60 * 60,
+                maximumMemoryCourses: 1
+            ),
+            now: { currentDate }
+        )
+
+        currentDate = Date(timeInterval: 120, since: currentDate)
+        store.pruneCourseDetailMemoryCache(referenceDate: currentDate)
+
+        #expect(store.hasLoadedAssignments(for: 1))
+        #expect(store.hasLoadedAssignments(for: 2))
+    }
+
+    @MainActor
+    @Test func canvasStoreBuildsLocalInventoryAndCourseOfflineReadiness() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let dashboardCacheURL = makeDashboardCacheTempURL()
+        let courseDetailCacheURL = makeCourseDetailCacheTempURL()
+        let preferencesURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "EventsTracker-\(UUID().uuidString)-course-preferences.json"
+        )
+        let fileMetadataURL = makeFileDownloadMetadataTempURL()
+        let downloadsURL = makeDownloadsTempDirectoryURL()
+        let recentSearchURL = makeRecentSearchTempURL()
+        let fileManager = FileManager.default
+        [
+            configURL,
+            dashboardCacheURL,
+            courseDetailCacheURL,
+            preferencesURL,
+            fileMetadataURL,
+            downloadsURL,
+            recentSearchURL
+        ].forEach { url in
+            try? fileManager.removeItem(at: url)
+        }
+        defer {
+            [
+                configURL,
+                dashboardCacheURL,
+                courseDetailCacheURL,
+                preferencesURL,
+                fileMetadataURL,
+                downloadsURL,
+                recentSearchURL
+            ].forEach { url in
+                try? fileManager.removeItem(at: url)
+            }
+        }
+
+        let referenceDate = Date(timeIntervalSince1970: 1_710_000_000)
+        let tokenStore = InMemoryCanvasTokenStore()
+        let configManager = CanvasConfigManager(configURL: configURL, tokenStore: tokenStore)
+        try configManager.saveConfig(makeCanvasConfig())
+
+        let databaseManager = DatabaseManager(cacheURL: dashboardCacheURL)
+        try databaseManager.saveSnapshot(
+            CanvasSnapshot(
+                courses: [makeCourse(id: 42, name: "Biology")],
+                upcomingEvents: [],
+                missingSubmissions: [],
+                profile: nil,
+                syncedAt: referenceDate
+            )
+        )
+
+        let folder = makeCanvasFolder(id: 100, name: "Course Files")
+        let file = makeCanvasFile(id: 200, name: "Lecture.pdf", folderID: folder.id)
+        let detailCacheManager = CourseDetailCacheManager(cacheURL: courseDetailCacheURL)
+        try detailCacheManager.saveCache(
+            CourseDetailCacheSnapshot(
+                assignmentsByCourseID: [
+                    42: [makeCourseAssignment(id: 1, name: "Lab", dueAt: referenceDate, courseID: 42)]
+                ],
+                modulesByCourseID: [
+                    42: [makeCourseModule(id: 2, name: "Week 1")]
+                ],
+                foldersByCourseID: [
+                    42: [folder]
+                ],
+                filesByFolderID: [
+                    folder.id: [file]
+                ],
+                announcementsByCourseID: [
+                    42: [makeCourseAnnouncement(id: 3, title: "Welcome", courseID: 42)]
+                ],
+                syllabusByCourseID: [
+                    42: CourseSyllabus(
+                        id: 42,
+                        name: "Biology",
+                        syllabusBody: "<p>Readings and lab policy.</p>",
+                        htmlURL: nil
+                    )
+                ],
+                peopleByCourseID: [
+                    42: [makeCoursePerson(id: 4, name: "Dr. Smith", role: "TeacherEnrollment")]
+                ],
+                courseAccessedAtByCourseID: [42: referenceDate],
+                savedAt: referenceDate
+            )
+        )
+
+        let fileDownloadManager = FileDownloadManager(metadataURL: fileMetadataURL, downloadsDirectory: downloadsURL)
+        let localURL = fileDownloadManager.localURL(for: file, courseID: 42)
+        try fileManager.createDirectory(at: localURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("notes".utf8).write(to: localURL)
+        try fileDownloadManager.saveSnapshot(
+            FileDownloadSnapshot(
+                recordsByFileID: [
+                    file.id: FileDownloadRecord(
+                        fileID: file.id,
+                        courseID: 42,
+                        folderID: folder.id,
+                        file: file,
+                        state: .downloaded,
+                        localPath: localURL.path,
+                        downloadedAt: referenceDate,
+                        byteCount: 5
+                    )
+                ],
+                updatedAt: referenceDate
+            )
+        )
+
+        let preferenceManager = CoursePreferenceManager(preferencesURL: preferencesURL)
+        try preferenceManager.savePreferences(
+            CoursePreferencesSnapshot(
+                pinnedCourseIDs: [42],
+                offlinePriorityCourseIDs: [42]
+            )
+        )
+        let recentSearchManager = RecentSearchManager(storageURL: recentSearchURL)
+        try recentSearchManager.saveTerms(["biology", "lab"])
+
+        let store = CanvasStore(
+            configManager: configManager,
+            databaseManager: databaseManager,
+            networkManager: .shared,
+            detailCacheManager: detailCacheManager,
+            preferenceManager: preferenceManager,
+            fileDownloadManager: fileDownloadManager,
+            recentSearchManager: recentSearchManager,
+            now: { referenceDate }
+        )
+
+        let inventory = store.localDataInventory
+        #expect(inventory.isConfigured)
+        #expect(inventory.lastDashboardSync == referenceDate)
+        #expect(inventory.courseDetailCourseCount == 1)
+        #expect(inventory.knownFileCount == 1)
+        #expect(inventory.downloadedFileCount == 1)
+        #expect(inventory.downloadedByteCount == 5)
+        #expect(inventory.recentSearchCount == 2)
+        #expect(inventory.pinnedCourseCount == 1)
+        #expect(inventory.offlinePriorityCourseCount == 1)
+
+        let readiness = try #require(store.courseOfflineReadiness.first)
+        #expect(readiness.courseID == 42)
+        #expect(readiness.isOfflinePriority)
+        #expect(readiness.hasAssignments)
+        #expect(readiness.hasModules)
+        #expect(readiness.hasFilesMetadata)
+        #expect(readiness.hasAnnouncements)
+        #expect(readiness.hasSyllabus)
+        #expect(readiness.hasPeople)
+        #expect(readiness.cachedSectionCount == readiness.totalSectionCount)
+        #expect(readiness.lastAccessedAt == referenceDate)
+    }
+
+    @MainActor
+    @Test func canvasStoreRefreshPreservesCourseDetailCache() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let dashboardCacheURL = makeDashboardCacheTempURL()
+        let courseDetailCacheURL = makeCourseDetailCacheTempURL()
+        let fileManager = FileManager.default
+        [configURL, dashboardCacheURL, courseDetailCacheURL].forEach { url in
+            try? fileManager.removeItem(at: url)
+        }
+        defer {
+            [configURL, dashboardCacheURL, courseDetailCacheURL].forEach { url in
+                try? fileManager.removeItem(at: url)
+            }
+        }
+
+        let referenceDate = Date(timeIntervalSince1970: 1_710_000_000)
+        let tokenStore = InMemoryCanvasTokenStore()
+        let configManager = CanvasConfigManager(configURL: configURL, tokenStore: tokenStore)
+        try configManager.saveConfig(makeCanvasConfig())
+
+        let databaseManager = DatabaseManager(cacheURL: dashboardCacheURL)
+        try databaseManager.saveSnapshot(
+            CanvasSnapshot(
+                courses: [makeCourse(id: 42, name: "Biology")],
+                upcomingEvents: [],
+                missingSubmissions: [],
+                profile: nil,
+                syncedAt: referenceDate
+            )
+        )
+
+        let detailCacheManager = CourseDetailCacheManager(cacheURL: courseDetailCacheURL)
+        try detailCacheManager.saveCache(
+            CourseDetailCacheSnapshot(
+                assignmentsByCourseID: [
+                    42: [makeCourseAssignment(id: 10, name: "Cached Lab", dueAt: referenceDate, courseID: 42)]
+                ],
+                modulesByCourseID: [:],
+                foldersByCourseID: [:],
+                filesByFolderID: [:],
+                announcementsByCourseID: [:],
+                syllabusByCourseID: [:],
+                courseAccessedAtByCourseID: [42: referenceDate],
+                savedAt: referenceDate
+            )
+        )
+
+        let session = makeCapturingURLSession { request in
+            let url = try #require(request.url)
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            switch url.path {
+            case "/api/v1/courses":
+                return (response, Data(#"[{"id":42,"name":"Biology","workflow_state":"available"}]"#.utf8))
+            case "/api/v1/users/self/upcoming_events", "/api/v1/users/self/missing_submissions":
+                return (response, Data("[]".utf8))
+            default:
+                return (response, Data(#"{"id":1,"name":"Alex"}"#.utf8))
+            }
+        }
+
+        let store = CanvasStore(
+            configManager: configManager,
+            databaseManager: databaseManager,
+            networkManager: NetworkManager(session: session),
+            detailCacheManager: detailCacheManager,
+            now: { referenceDate }
+        )
+
+        await store.refresh()
+
+        #expect(store.hasLoadedAssignments(for: 42))
+        let cachedSnapshot = try #require(detailCacheManager.loadCache(validAt: referenceDate, maximumAge: 24 * 60 * 60))
+        #expect(cachedSnapshot.assignmentsByCourseID[42]?.map(\.name) == ["Cached Lab"])
+    }
+
+    @MainActor
+    @Test func canvasStoreFallsBackToDiskCourseDetailsWhenSectionRefreshFails() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let dashboardCacheURL = makeDashboardCacheTempURL()
+        let courseDetailCacheURL = makeCourseDetailCacheTempURL()
+        let fileManager = FileManager.default
+        [configURL, dashboardCacheURL, courseDetailCacheURL].forEach { url in
+            try? fileManager.removeItem(at: url)
+        }
+        defer {
+            [configURL, dashboardCacheURL, courseDetailCacheURL].forEach { url in
+                try? fileManager.removeItem(at: url)
+            }
+        }
+
+        var currentDate = Date(timeIntervalSince1970: 1_710_000_000)
+        let tokenStore = InMemoryCanvasTokenStore()
+        let configManager = CanvasConfigManager(configURL: configURL, tokenStore: tokenStore)
+        try configManager.saveConfig(makeCanvasConfig())
+
+        let databaseManager = DatabaseManager(cacheURL: dashboardCacheURL)
+        try databaseManager.saveSnapshot(
+            CanvasSnapshot(
+                courses: [
+                    makeCourse(id: 1, name: "Selected"),
+                    makeCourse(id: 42, name: "Biology")
+                ],
+                upcomingEvents: [],
+                missingSubmissions: [],
+                profile: nil,
+                syncedAt: currentDate
+            )
+        )
+
+        let detailCacheManager = CourseDetailCacheManager(cacheURL: courseDetailCacheURL)
+        try detailCacheManager.saveCache(
+            CourseDetailCacheSnapshot(
+                assignmentsByCourseID: [
+                    42: [makeCourseAssignment(id: 10, name: "Cached Lab", dueAt: currentDate, courseID: 42)]
+                ],
+                modulesByCourseID: [:],
+                foldersByCourseID: [:],
+                filesByFolderID: [:],
+                announcementsByCourseID: [:],
+                syllabusByCourseID: [:],
+                courseAccessedAtByCourseID: [42: currentDate],
+                savedAt: currentDate
+            )
+        )
+
+        currentDate = Date(timeInterval: 120, since: currentDate)
+        let session = makeCapturingURLSession { request in
+            let url = try #require(request.url)
+            let response = HTTPURLResponse(url: url, statusCode: 500, httpVersion: nil, headerFields: nil)!
+            return (response, Data("Server unavailable".utf8))
+        }
+
+        let store = CanvasStore(
+            configManager: configManager,
+            databaseManager: databaseManager,
+            networkManager: NetworkManager(session: session),
+            detailCacheManager: detailCacheManager,
+            cachePolicy: CanvasCachePolicy(
+                memoryTimeToLive: 60,
+                diskTimeToLive: 24 * 60 * 60,
+                maintenanceInterval: 60 * 60,
+                maximumMemoryCourses: 1
+            ),
+            now: { currentDate }
+        )
+
+        #expect(!store.hasLoadedAssignments(for: 42))
+
+        await store.loadAssignments(for: 42)
+
+        #expect(store.assignments(for: 42).map(\.name) == ["Cached Lab"])
+        #expect(store.errorMessage?.contains("Showing cached data") == true)
+    }
+
+    @MainActor
+    @Test func canvasStorePreloadsOfflinePriorityMetadataWithoutDownloadingFileBodies() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let dashboardCacheURL = makeDashboardCacheTempURL()
+        let courseDetailCacheURL = makeCourseDetailCacheTempURL()
+        let preferencesURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "EventsTracker-\(UUID().uuidString)-course-preferences.json"
+        )
+        let fileMetadataURL = makeFileDownloadMetadataTempURL()
+        let downloadsURL = makeDownloadsTempDirectoryURL()
+        let fileManager = FileManager.default
+        [configURL, dashboardCacheURL, courseDetailCacheURL, preferencesURL, fileMetadataURL, downloadsURL].forEach { url in
+            try? fileManager.removeItem(at: url)
+        }
+        defer {
+            [configURL, dashboardCacheURL, courseDetailCacheURL, preferencesURL, fileMetadataURL, downloadsURL].forEach { url in
+                try? fileManager.removeItem(at: url)
+            }
+        }
+
+        let referenceDate = Date(timeIntervalSince1970: 1_710_000_000)
+        let tokenStore = InMemoryCanvasTokenStore()
+        let configManager = CanvasConfigManager(configURL: configURL, tokenStore: tokenStore)
+        try configManager.saveConfig(makeCanvasConfig())
+
+        let databaseManager = DatabaseManager(cacheURL: dashboardCacheURL)
+        try databaseManager.saveSnapshot(
+            CanvasSnapshot(
+                courses: [makeCourse(id: 42, name: "Biology")],
+                upcomingEvents: [],
+                missingSubmissions: [],
+                profile: nil,
+                syncedAt: referenceDate
+            )
+        )
+
+        let preferenceManager = CoursePreferenceManager(preferencesURL: preferencesURL)
+        try preferenceManager.savePreferences(CoursePreferencesSnapshot(offlinePriorityCourseIDs: [42]))
+
+        let session = makeCapturingURLSession { request in
+            let url = try #require(request.url)
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+
+            switch url.path {
+            case "/api/v1/courses/42/assignments":
+                return (response, Data(#"[{"id":1,"name":"Lab","course_id":42,"published":true}]"#.utf8))
+            case "/api/v1/courses/42/modules":
+                return (response, Data(#"[{"id":2,"name":"Week 1","position":1,"workflow_state":"active","published":true,"items":[] }]"#.utf8))
+            case "/api/v1/courses/42/folders":
+                return (response, Data(#"[{"id":3,"name":"Course Files","full_name":"Course Files"}]"#.utf8))
+            case "/api/v1/folders/3/files":
+                return (response, Data(#"[{"id":4,"display_name":"Lecture.pdf","filename":"Lecture.pdf","folder_id":3,"content-type":"application/pdf","url":"https://canvas.example.edu/files/4/download","size":5}]"#.utf8))
+            case "/api/v1/announcements":
+                return (response, Data(#"[{"id":5,"title":"Welcome","context_code":"course_42","read_state":"read"}]"#.utf8))
+            case "/api/v1/courses/42":
+                return (response, Data(#"{"id":42,"name":"Biology","syllabus_body":"<p>Policy</p>"}"#.utf8))
+            case "/api/v1/courses/42/users":
+                return (response, Data(#"[{"id":6,"name":"Dr. Smith","sortable_name":"Smith, Dr.","short_name":"Dr. Smith","enrollments":[{"type":"TeacherEnrollment","role":"TeacherEnrollment"}]}]"#.utf8))
+            default:
+                Issue.record("Unexpected preload request: \(url.path)")
+                return (response, Data("[]".utf8))
+            }
+        }
+
+        let store = CanvasStore(
+            configManager: configManager,
+            databaseManager: databaseManager,
+            networkManager: NetworkManager(session: session),
+            detailCacheManager: CourseDetailCacheManager(cacheURL: courseDetailCacheURL),
+            preferenceManager: preferenceManager,
+            fileDownloadManager: FileDownloadManager(metadataURL: fileMetadataURL, downloadsDirectory: downloadsURL),
+            now: { referenceDate }
+        )
+
+        await store.preloadOfflinePriorityCourseMetadata()
+
+        let readiness = try #require(store.courseOfflineReadiness.first)
+        #expect(readiness.isFullyCached)
+        #expect(store.fileDownloadSnapshot.recordsByFileID[4]?.state == .notDownloaded)
+        #expect(store.fileDownloadSnapshot.downloadedRecords.isEmpty)
     }
 
     @Test func networkManagerFetchesAnnouncementsWithCourseContext() async throws {
@@ -1703,6 +2206,145 @@ struct Events_TrackerTests {
         #expect(record.localPreviewURL == localURL)
     }
 
+    @MainActor
+    @Test func canvasStoreBlocksDownloadsThatWouldExceedConfiguredCacheLimit() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let dashboardCacheURL = makeDashboardCacheTempURL()
+        let fileMetadataURL = makeFileDownloadMetadataTempURL()
+        let downloadsURL = makeDownloadsTempDirectoryURL()
+        let fileManager = FileManager.default
+        [configURL, dashboardCacheURL, fileMetadataURL, downloadsURL].forEach { url in
+            try? fileManager.removeItem(at: url)
+        }
+        defer {
+            [configURL, dashboardCacheURL, fileMetadataURL, downloadsURL].forEach { url in
+                try? fileManager.removeItem(at: url)
+            }
+        }
+
+        let tokenStore = InMemoryCanvasTokenStore()
+        let configManager = CanvasConfigManager(configURL: configURL, tokenStore: tokenStore)
+        try configManager.saveConfig(makeCanvasConfig(downloadCacheLimit: .oneGB))
+
+        let seededDownloadManager = FileDownloadManager(metadataURL: fileMetadataURL, downloadsDirectory: downloadsURL)
+        let existingFile = makeCanvasFile(id: 1, name: "Existing.pdf")
+        let existingURL = seededDownloadManager.localURL(for: existingFile, courseID: 42)
+        try fileManager.createDirectory(at: existingURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("existing".utf8).write(to: existingURL)
+        try seededDownloadManager.saveSnapshot(
+            FileDownloadSnapshot(recordsByFileID: [
+                existingFile.id: FileDownloadRecord(
+                    fileID: existingFile.id,
+                    courseID: 42,
+                    folderID: nil,
+                    file: existingFile,
+                    state: .downloaded,
+                    localPath: existingURL.path,
+                    downloadedAt: Date(),
+                    byteCount: DownloadCacheLimitPreset.oneGB.byteLimit! - 1_024
+                )
+            ])
+        )
+
+        let session = makeCapturingURLSession { request in
+            Issue.record("Download request should not start when cache limit would be exceeded")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data("too late".utf8))
+        }
+        let store = CanvasStore(
+            configManager: configManager,
+            databaseManager: DatabaseManager(cacheURL: dashboardCacheURL),
+            networkManager: .shared,
+            fileDownloadManager: FileDownloadManager(metadataURL: fileMetadataURL, downloadsDirectory: downloadsURL, session: session)
+        )
+        let newFile = makeCanvasFile(
+            id: 2,
+            name: "New.pdf",
+            url: URL(string: "https://canvas.example.edu/files/2/download"),
+            size: 2_048
+        )
+
+        await store.downloadFile(newFile, courseID: 42)
+
+        #expect(store.fileDownloadSnapshot.recordsByFileID[newFile.id]?.state == .failed)
+        #expect(store.errorMessage?.contains("Download cache limit") == true)
+        #expect(store.fileDownloadSnapshot.downloadedRecords.map(\.fileID) == [existingFile.id])
+    }
+
+    @MainActor
+    @Test func canvasStoreCountsInProgressDownloadsTowardConfiguredCacheLimit() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let dashboardCacheURL = makeDashboardCacheTempURL()
+        let fileMetadataURL = makeFileDownloadMetadataTempURL()
+        let downloadsURL = makeDownloadsTempDirectoryURL()
+        let fileManager = FileManager.default
+        [configURL, dashboardCacheURL, fileMetadataURL, downloadsURL].forEach { url in
+            try? fileManager.removeItem(at: url)
+        }
+        defer {
+            BlockingDownloadURLProtocol.release()
+            [configURL, dashboardCacheURL, fileMetadataURL, downloadsURL].forEach { url in
+                try? fileManager.removeItem(at: url)
+            }
+        }
+
+        let tokenStore = InMemoryCanvasTokenStore()
+        let configManager = CanvasConfigManager(configURL: configURL, tokenStore: tokenStore)
+        try configManager.saveConfig(makeCanvasConfig(downloadCacheLimit: .oneGB))
+
+        let seededDownloadManager = FileDownloadManager(metadataURL: fileMetadataURL, downloadsDirectory: downloadsURL)
+        let existingFile = makeCanvasFile(id: 1, name: "Existing.pdf")
+        let existingURL = seededDownloadManager.localURL(for: existingFile, courseID: 42)
+        try fileManager.createDirectory(at: existingURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("existing".utf8).write(to: existingURL)
+        try seededDownloadManager.saveSnapshot(
+            FileDownloadSnapshot(recordsByFileID: [
+                existingFile.id: FileDownloadRecord(
+                    fileID: existingFile.id,
+                    courseID: 42,
+                    folderID: nil,
+                    file: existingFile,
+                    state: .downloaded,
+                    localPath: existingURL.path,
+                    downloadedAt: Date(),
+                    byteCount: DownloadCacheLimitPreset.oneGB.byteLimit! - 2_048
+                )
+            ])
+        )
+
+        let session = BlockingDownloadURLProtocol.makeSession()
+        let store = CanvasStore(
+            configManager: configManager,
+            databaseManager: DatabaseManager(cacheURL: dashboardCacheURL),
+            networkManager: .shared,
+            fileDownloadManager: FileDownloadManager(metadataURL: fileMetadataURL, downloadsDirectory: downloadsURL, session: session)
+        )
+        let firstFile = makeCanvasFile(
+            id: 2,
+            name: "First.pdf",
+            url: URL(string: "https://canvas.example.edu/files/block-first"),
+            size: 1_024
+        )
+        let secondFile = makeCanvasFile(
+            id: 3,
+            name: "Second.pdf",
+            url: URL(string: "https://canvas.example.edu/files/second"),
+            size: 2_048
+        )
+
+        let firstDownload = Task {
+            await store.downloadFile(firstFile, courseID: 42)
+        }
+        #expect(await BlockingDownloadURLProtocol.waitUntilStarted())
+
+        await store.downloadFile(secondFile, courseID: 42)
+        BlockingDownloadURLProtocol.release()
+        await firstDownload.value
+
+        #expect(store.fileDownloadSnapshot.recordsByFileID[secondFile.id]?.state == .failed)
+        #expect(store.errorMessage?.contains("Download cache limit") == true)
+    }
+
     @Test func fileDownloadManagerReconcilesInterruptedAndMissingLocalRecords() async throws {
         let file = makeCanvasFile(id: 20, name: "Reading.pdf")
         let interrupted = FileDownloadRecord(
@@ -1914,6 +2556,19 @@ struct Events_TrackerTests {
         )
     }
 
+    private func makeCanvasConfig(
+        telegramReminders: TelegramReminderConfig = TelegramReminderConfig(),
+        downloadCacheLimit: DownloadCacheLimitPreset
+    ) -> CanvasConfig {
+        CanvasConfig(
+            baseURL: "https://canvas.example.edu",
+            token: "token",
+            lookaheadDays: 14,
+            telegramReminders: telegramReminders,
+            downloadCacheLimit: downloadCacheLimit
+        )
+    }
+
     private func makeCourse(id: Int, name: String) -> Course {
         Course(
             id: id,
@@ -1950,6 +2605,19 @@ struct Events_TrackerTests {
         )
     }
 
+    private func makeCourseModule(id: Int, name: String) -> CourseModule {
+        CourseModule(
+            id: id,
+            name: name,
+            position: nil,
+            workflowState: "active",
+            unlockAt: nil,
+            itemsCount: 0,
+            published: true,
+            items: []
+        )
+    }
+
     private func makeCanvasFolder(id: Int, name: String) -> CanvasFolder {
         CanvasFolder(
             id: id,
@@ -1964,11 +2632,26 @@ struct Events_TrackerTests {
         )
     }
 
+    private func makeCourseAnnouncement(id: Int, title: String, courseID: Int) -> CourseAnnouncement {
+        CourseAnnouncement(
+            id: id,
+            title: title,
+            message: "<p>\(title)</p>",
+            postedAt: nil,
+            delayedPostAt: nil,
+            contextCode: "course_\(courseID)",
+            htmlURL: nil,
+            readState: "read",
+            lockedForUser: false
+        )
+    }
+
     private func makeCanvasFile(
         id: Int,
         name: String,
         folderID: Int? = nil,
-        url: URL? = nil
+        url: URL? = nil,
+        size: Int? = 1_024
     ) -> CanvasFile {
         CanvasFile(
             id: id,
@@ -1979,7 +2662,7 @@ struct Events_TrackerTests {
             contentType: "application/pdf",
             url: url,
             htmlURL: nil,
-            size: 1_024,
+            size: size,
             createdAt: nil,
             updatedAt: nil,
             unlockAt: nil,
@@ -2106,6 +2789,52 @@ private final class CapturingURLProtocol: URLProtocol {
         } catch {
             client?.urlProtocol(self, didFailWithError: error)
         }
+    }
+
+    override func stopLoading() {}
+}
+
+private final class BlockingDownloadURLProtocol: URLProtocol {
+    private static var startedSemaphore = DispatchSemaphore(value: 0)
+    private static var releaseSemaphore = DispatchSemaphore(value: 0)
+
+    static func makeSession() -> URLSession {
+        startedSemaphore = DispatchSemaphore(value: 0)
+        releaseSemaphore = DispatchSemaphore(value: 0)
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [BlockingDownloadURLProtocol.self]
+        return URLSession(configuration: configuration)
+    }
+
+    static func waitUntilStarted() async -> Bool {
+        await Task.detached {
+            startedSemaphore.wait(timeout: .now() + 2) == .success
+        }.value
+    }
+
+    static func release() {
+        releaseSemaphore.signal()
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        if request.url?.absoluteString.contains("block-first") == true {
+            Self.startedSemaphore.signal()
+            _ = Self.releaseSemaphore.wait(timeout: .now() + 2)
+        }
+
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data("download".utf8))
+        client?.urlProtocolDidFinishLoading(self)
     }
 
     override func stopLoading() {}

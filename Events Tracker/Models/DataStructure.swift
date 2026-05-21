@@ -84,29 +84,73 @@ struct TelegramReminderConfig: Codable, Equatable {
     }
 }
 
+enum DownloadCacheLimitPreset: String, Codable, CaseIterable, Identifiable {
+    case fiveHundredMB
+    case oneGB
+    case twoGB
+    case fiveGB
+    case unlimited
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .fiveHundredMB:
+            return "512 MB"
+        case .oneGB:
+            return "1 GB"
+        case .twoGB:
+            return "2 GB"
+        case .fiveGB:
+            return "5 GB"
+        case .unlimited:
+            return "Unlimited"
+        }
+    }
+
+    var byteLimit: Int? {
+        switch self {
+        case .fiveHundredMB:
+            return 512 * 1_024 * 1_024
+        case .oneGB:
+            return 1 * 1_024 * 1_024 * 1_024
+        case .twoGB:
+            return 2 * 1_024 * 1_024 * 1_024
+        case .fiveGB:
+            return 5 * 1_024 * 1_024 * 1_024
+        case .unlimited:
+            return nil
+        }
+    }
+}
+
 struct CanvasConfig: Codable, Equatable {
     var baseURL: String = ""
     var token: String = ""
     var lookaheadDays: Int = 14
     var telegramReminders: TelegramReminderConfig = TelegramReminderConfig()
+    var downloadCacheLimit: DownloadCacheLimitPreset = .unlimited
 
     enum CodingKeys: String, CodingKey {
         case baseURL
         case token
         case lookaheadDays
         case telegramReminders
+        case downloadCacheLimit
     }
 
     init(
         baseURL: String = "",
         token: String = "",
         lookaheadDays: Int = 14,
-        telegramReminders: TelegramReminderConfig = TelegramReminderConfig()
+        telegramReminders: TelegramReminderConfig = TelegramReminderConfig(),
+        downloadCacheLimit: DownloadCacheLimitPreset = .unlimited
     ) {
         self.baseURL = baseURL
         self.token = token
         self.lookaheadDays = lookaheadDays
         self.telegramReminders = telegramReminders
+        self.downloadCacheLimit = downloadCacheLimit
     }
 
     init(from decoder: Decoder) throws {
@@ -118,6 +162,10 @@ struct CanvasConfig: Codable, Equatable {
             TelegramReminderConfig.self,
             forKey: .telegramReminders
         ) ?? TelegramReminderConfig()
+        downloadCacheLimit = try container.decodeIfPresent(
+            DownloadCacheLimitPreset.self,
+            forKey: .downloadCacheLimit
+        ) ?? .unlimited
     }
 
     func encode(to encoder: Encoder) throws {
@@ -125,6 +173,7 @@ struct CanvasConfig: Codable, Equatable {
         try container.encode(baseURL, forKey: .baseURL)
         try container.encode(lookaheadDays, forKey: .lookaheadDays)
         try container.encode(telegramReminders, forKey: .telegramReminders)
+        try container.encode(downloadCacheLimit, forKey: .downloadCacheLimit)
     }
 
     var normalizedBaseURL: String {
@@ -722,22 +771,63 @@ struct SingleCoursePreference: Codable, Equatable {
 struct CoursePreferencesSnapshot: Codable, Equatable {
     var pinnedCourseIDs: Set<Int>
     var hiddenCourseIDs: Set<Int>
+    var offlinePriorityCourseIDs: Set<Int>
+    var showsHiddenCourses: Bool
     var defaultCourseID: Int?
     var defaultEventsCourseID: Int?
     var preferencesByCourseID: [Int: SingleCoursePreference]
 
+    enum CodingKeys: String, CodingKey {
+        case pinnedCourseIDs
+        case hiddenCourseIDs
+        case offlinePriorityCourseIDs
+        case showsHiddenCourses
+        case defaultCourseID
+        case defaultEventsCourseID
+        case preferencesByCourseID
+    }
+
     init(
         pinnedCourseIDs: Set<Int> = [],
         hiddenCourseIDs: Set<Int> = [],
+        offlinePriorityCourseIDs: Set<Int> = [],
+        showsHiddenCourses: Bool = false,
         defaultCourseID: Int? = nil,
         defaultEventsCourseID: Int? = nil,
         preferencesByCourseID: [Int: SingleCoursePreference] = [:]
     ) {
         self.pinnedCourseIDs = pinnedCourseIDs
         self.hiddenCourseIDs = hiddenCourseIDs
+        self.offlinePriorityCourseIDs = offlinePriorityCourseIDs
+        self.showsHiddenCourses = showsHiddenCourses
         self.defaultCourseID = defaultCourseID
         self.defaultEventsCourseID = defaultEventsCourseID
         self.preferencesByCourseID = preferencesByCourseID
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        pinnedCourseIDs = try container.decodeIfPresent(Set<Int>.self, forKey: .pinnedCourseIDs) ?? []
+        hiddenCourseIDs = try container.decodeIfPresent(Set<Int>.self, forKey: .hiddenCourseIDs) ?? []
+        offlinePriorityCourseIDs = try container.decodeIfPresent(Set<Int>.self, forKey: .offlinePriorityCourseIDs) ?? []
+        showsHiddenCourses = try container.decodeIfPresent(Bool.self, forKey: .showsHiddenCourses) ?? false
+        defaultCourseID = try container.decodeIfPresent(Int.self, forKey: .defaultCourseID)
+        defaultEventsCourseID = try container.decodeIfPresent(Int.self, forKey: .defaultEventsCourseID)
+        preferencesByCourseID = try container.decodeIfPresent(
+            [Int: SingleCoursePreference].self,
+            forKey: .preferencesByCourseID
+        ) ?? [:]
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(pinnedCourseIDs, forKey: .pinnedCourseIDs)
+        try container.encode(hiddenCourseIDs, forKey: .hiddenCourseIDs)
+        try container.encode(offlinePriorityCourseIDs, forKey: .offlinePriorityCourseIDs)
+        try container.encode(showsHiddenCourses, forKey: .showsHiddenCourses)
+        try container.encodeIfPresent(defaultCourseID, forKey: .defaultCourseID)
+        try container.encodeIfPresent(defaultEventsCourseID, forKey: .defaultEventsCourseID)
+        try container.encode(preferencesByCourseID, forKey: .preferencesByCourseID)
     }
 }
 

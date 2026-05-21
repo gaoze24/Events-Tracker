@@ -10,6 +10,7 @@ import SwiftUI
 private enum AppSection: String, CaseIterable, Identifiable {
     case dashboard = "Dashboard"
     case search = "Search"
+    case sync = "Sync"
     case inbox = "Inbox"
     case assignments = "Assignments"
     case courses = "Courses"
@@ -26,6 +27,8 @@ private enum AppSection: String, CaseIterable, Identifiable {
             return "rectangle.3.group"
         case .search:
             return "magnifyingglass"
+        case .sync:
+            return "arrow.triangle.2.circlepath"
         case .inbox:
             return "tray"
         case .assignments:
@@ -78,6 +81,8 @@ struct ContentView: View {
                         GlobalSearchView {
                             selectedSection = .courses
                         }
+                    case .sync:
+                        SyncCenterView()
                     case .inbox:
                         InboxView()
                     case .assignments:

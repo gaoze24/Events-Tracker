@@ -273,7 +273,13 @@ struct CoursesView: View {
                     Toggle("Show Hidden", isOn: $showingHiddenCourses)
 
                     ForEach(store.preferredCourses(showingHidden: showingHiddenCourses)) { course in
-                        CourseListRow(course: course)
+                        CourseListRow(
+                            course: course,
+                            isPinned: store.coursePreferences.pinnedCourseIDs.contains(course.id),
+                            isHidden: store.coursePreferences.hiddenCourseIDs.contains(course.id),
+                            isDefault: store.coursePreferences.defaultCourseID == course.id,
+                            isOfflinePriority: store.coursePreferences.offlinePriorityCourseIDs.contains(course.id)
+                        )
                             .tag(Optional(course.id))
                     }
                 }
@@ -314,9 +320,23 @@ struct CoursesView: View {
                                         store.toggleHiddenCourse(selectedCourse.id)
                                     }
 
+                                    Button(
+                                        store.coursePreferences.offlinePriorityCourseIDs.contains(selectedCourse.id)
+                                            ? "Unmark Offline Priority"
+                                            : "Mark Offline Priority"
+                                    ) {
+                                        store.toggleOfflinePriorityCourse(selectedCourse.id)
+                                    }
+
+                                    Divider()
+
                                     Button("Set as Default Course") {
                                         store.setDefaultCourse(selectedCourse.id)
                                         store.selectedCourseID = selectedCourse.id
+                                    }
+
+                                    Button("Set as Default Events Course") {
+                                        store.setDefaultEventsCourse(selectedCourse.id)
                                     }
                                 }
 
@@ -476,6 +496,8 @@ struct CoursesView: View {
                 }
             }
             .onAppear {
+                showingHiddenCourses = store.coursePreferences.showsHiddenCourses
+
                 if let defaultCourseID = store.resolvedDefaultCourseID(showingHidden: showingHiddenCourses) {
                     store.selectedCourseID = defaultCourseID
                     applyCoursePreference(for: defaultCourseID)
@@ -483,6 +505,9 @@ struct CoursesView: View {
             }
             .onChange(of: store.selectedCourseID) { _, newValue in
                 applyCoursePreference(for: newValue)
+            }
+            .onChange(of: showingHiddenCourses) { _, newValue in
+                store.setShowsHiddenCourses(newValue)
             }
         }
     }

@@ -32,6 +32,7 @@ final class CanvasStore: ObservableObject {
     @Published private(set) var coursePreferences: CoursePreferencesSnapshot
     @Published private(set) var fileDownloadSnapshot: FileDownloadSnapshot
     @Published private(set) var downloadingFileIDs: Set<Int>
+    @Published private(set) var preloadingCourseIDs: Set<Int>
     @Published private(set) var recentSearchTerms: [String]
     @Published private(set) var inboxConversations: [CanvasConversation]
     @Published private(set) var loadingInbox: Bool
@@ -85,6 +86,7 @@ final class CanvasStore: ObservableObject {
         coursePreferences = preferenceManager.loadPreferences()
         fileDownloadSnapshot = fileDownloadManager.loadSnapshot()
         downloadingFileIDs = []
+        preloadingCourseIDs = []
         recentSearchTerms = recentSearchManager.loadTerms()
         inboxConversations = []
         loadingInbox = false
@@ -204,6 +206,44 @@ final class CanvasStore: ObservableObject {
         return relativeFormatter.localizedString(for: lastSyncedAt, relativeTo: Date())
     }
 
+    var localDataInventory: LocalDataInventory {
+        LocalDataInventory(
+            isConfigured: isConfigured,
+            lastDashboardSync: lastSyncedAt,
+            courseDetailCourseCount: cachedCourseDetailIDs.count,
+            knownFileCount: fileDownloadSnapshot.recordsByFileID.count,
+            downloadedFileCount: fileDownloadSnapshot.downloadedRecords.count,
+            downloadedByteCount: fileDownloadSnapshot.downloadedByteCount,
+            downloadCacheLimitBytes: config.downloadCacheLimit.byteLimit,
+            downloadCacheLimitLabel: config.downloadCacheLimit.label,
+            recentSearchCount: recentSearchTerms.count,
+            pinnedCourseCount: coursePreferences.pinnedCourseIDs.count,
+            hiddenCourseCount: coursePreferences.hiddenCourseIDs.count,
+            offlinePriorityCourseCount: coursePreferences.offlinePriorityCourseIDs.count
+        )
+    }
+
+    var courseOfflineReadiness: [CourseOfflineReadiness] {
+        preferredCourses(showingHidden: true).map { course in
+            let courseFolderIDs = Set((courseFoldersByCourseID[course.id] ?? []).map(\.id))
+            let hasFilesMetadata = !courseFolderIDs.isEmpty
+                && courseFolderIDs.contains { courseFilesByFolderID[$0] != nil }
+
+            return CourseOfflineReadiness(
+                courseID: course.id,
+                courseName: course.name,
+                isOfflinePriority: coursePreferences.offlinePriorityCourseIDs.contains(course.id),
+                hasAssignments: courseAssignmentsByCourseID[course.id] != nil,
+                hasModules: courseModulesByCourseID[course.id] != nil,
+                hasFilesMetadata: hasFilesMetadata,
+                hasAnnouncements: courseAnnouncementsByCourseID[course.id] != nil,
+                hasSyllabus: courseSyllabusByCourseID[course.id] != nil,
+                hasPeople: coursePeopleByCourseID[course.id] != nil,
+                lastAccessedAt: courseDetailAccessDates[course.id]
+            )
+        }
+    }
+
     func refreshIfNeeded() async {
         guard isConfigured, courses.isEmpty, upcomingEvents.isEmpty, missingSubmissions.isEmpty else {
             return
@@ -224,8 +264,6 @@ final class CanvasStore: ObservableObject {
         do {
             let snapshot = try await networkManager.fetchDashboardSnapshot(using: config)
             applySnapshot(snapshot)
-            clearCourseDetailMemoryCache()
-            try? detailCacheManager.clearCache()
             try databaseManager.saveSnapshot(snapshot)
         } catch {
             errorMessage = error.localizedDescription
@@ -239,13 +277,15 @@ final class CanvasStore: ObservableObject {
         baseURL: String,
         token: String,
         lookaheadDays: Int,
-        telegramReminders: TelegramReminderConfig
+        telegramReminders: TelegramReminderConfig,
+        downloadCacheLimit: DownloadCacheLimitPreset = .unlimited
     ) throws -> Bool {
         let updatedConfig = CanvasConfig(
             baseURL: baseURL,
             token: token,
             lookaheadDays: lookaheadDays,
-            telegramReminders: telegramReminders
+            telegramReminders: telegramReminders,
+            downloadCacheLimit: downloadCacheLimit
         )
 
         let credentialsChanged = updatedConfig.normalizedBaseURL != config.normalizedBaseURL
@@ -280,6 +320,7 @@ final class CanvasStore: ObservableObject {
             coursePreferences = CoursePreferencesSnapshot()
             fileDownloadSnapshot = FileDownloadSnapshot()
             downloadingFileIDs = []
+            preloadingCourseIDs = []
             try recentSearchManager.clearTerms()
             recentSearchTerms = []
             inboxConversations = []
@@ -301,6 +342,13 @@ final class CanvasStore: ObservableObject {
 
             if leftPinned != rightPinned {
                 return leftPinned
+            }
+
+            let leftOffline = coursePreferences.offlinePriorityCourseIDs.contains(lhs.id)
+            let rightOffline = coursePreferences.offlinePriorityCourseIDs.contains(rhs.id)
+
+            if leftOffline != rightOffline {
+                return leftOffline
             }
 
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
@@ -369,6 +417,25 @@ final class CanvasStore: ObservableObject {
             coursePreferences.defaultEventsCourseID = nil
         }
 
+        persistCoursePreferences()
+    }
+
+    func toggleOfflinePriorityCourse(_ courseID: Int) {
+        if coursePreferences.offlinePriorityCourseIDs.contains(courseID) {
+            coursePreferences.offlinePriorityCourseIDs.remove(courseID)
+        } else {
+            coursePreferences.offlinePriorityCourseIDs.insert(courseID)
+        }
+
+        persistCoursePreferences()
+    }
+
+    func setShowsHiddenCourses(_ showsHiddenCourses: Bool) {
+        guard coursePreferences.showsHiddenCourses != showsHiddenCourses else {
+            return
+        }
+
+        coursePreferences.showsHiddenCourses = showsHiddenCourses
         persistCoursePreferences()
     }
 
@@ -556,7 +623,7 @@ final class CanvasStore: ObservableObject {
             markCourseDetailAccess(courseID)
             persistCourseDetailCache()
         } catch {
-            errorMessage = error.localizedDescription
+            handleCourseDetailLoadFailure(error, courseID: courseID)
         }
 
         loadingCourseAssignmentIDs.remove(courseID)
@@ -609,7 +676,7 @@ final class CanvasStore: ObservableObject {
             markCourseDetailAccess(courseID)
             persistCourseDetailCache()
         } catch {
-            errorMessage = error.localizedDescription
+            handleCourseDetailLoadFailure(error, courseID: courseID)
         }
 
         loadingCourseModuleIDs.remove(courseID)
@@ -738,7 +805,7 @@ final class CanvasStore: ObservableObject {
                 await loadFiles(for: firstFolderID)
             }
         } catch {
-            errorMessage = error.localizedDescription
+            handleCourseDetailLoadFailure(error, courseID: courseID)
         }
 
         loadingCourseFolderIDs.remove(courseID)
@@ -780,7 +847,11 @@ final class CanvasStore: ObservableObject {
                 persistCourseDetailCache()
             }
         } catch {
-            errorMessage = error.localizedDescription
+            if let courseID = courseID(containingFolderID: folderID) {
+                handleCourseDetailLoadFailure(error, courseID: courseID)
+            } else {
+                errorMessage = error.localizedDescription
+            }
         }
 
         loadingFolderFileIDs.remove(folderID)
@@ -794,6 +865,12 @@ final class CanvasStore: ObservableObject {
 
         guard !file.isUnavailable else {
             updateDownloadRecord(file: file, courseID: courseID, state: .failed, message: "Canvas marks this file as locked or hidden.")
+            return
+        }
+
+        if let limitError = downloadCacheLimitError(for: file) {
+            updateDownloadRecord(file: file, courseID: courseID, state: .failed, message: limitError)
+            errorMessage = limitError
             return
         }
 
@@ -854,6 +931,73 @@ final class CanvasStore: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    func clearDashboardCache() {
+        courses = []
+        upcomingEvents = []
+        missingSubmissions = []
+        profile = nil
+        lastSyncedAt = nil
+        selectedCourseID = nil
+
+        do {
+            try databaseManager.clearSnapshot()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func clearCourseDetailCache() {
+        clearCourseDetailMemoryCache()
+
+        do {
+            try detailCacheManager.clearCache()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func preloadOfflinePriorityCourseMetadata() async {
+        let courseIDs = coursePreferences.offlinePriorityCourseIDs
+            .filter { courseID in courses.contains { $0.id == courseID } }
+            .sorted()
+
+        for courseID in courseIDs {
+            await preloadCourseMetadata(courseID: courseID)
+        }
+    }
+
+    func preloadCourseMetadata(courseID: Int) async {
+        guard config.isComplete else {
+            errorMessage = CanvasServiceError.incompleteConfiguration.localizedDescription
+            return
+        }
+
+        guard courses.contains(where: { $0.id == courseID }) else {
+            return
+        }
+
+        guard !preloadingCourseIDs.contains(courseID) else {
+            return
+        }
+
+        preloadingCourseIDs.insert(courseID)
+        defer {
+            preloadingCourseIDs.remove(courseID)
+        }
+
+        await loadAssignments(for: courseID)
+        await loadModules(for: courseID)
+        await loadCourseFiles(for: courseID)
+
+        for folder in courseFoldersByCourseID[courseID] ?? [] {
+            await loadFilesIfNeeded(for: folder.id)
+        }
+
+        await loadAnnouncements(for: courseID)
+        await loadSyllabus(for: courseID)
+        await loadPeople(for: courseID)
     }
 
     func globalSearchResults(for query: String) -> [GlobalSearchResult] {
@@ -1023,7 +1167,7 @@ final class CanvasStore: ObservableObject {
             markCourseDetailAccess(courseID)
             persistCourseDetailCache()
         } catch {
-            errorMessage = error.localizedDescription
+            handleCourseDetailLoadFailure(error, courseID: courseID)
         }
 
         loadingCourseAnnouncementIDs.remove(courseID)
@@ -1060,7 +1204,7 @@ final class CanvasStore: ObservableObject {
             markCourseDetailAccess(courseID)
             persistCourseDetailCache()
         } catch {
-            errorMessage = error.localizedDescription
+            handleCourseDetailLoadFailure(error, courseID: courseID)
         }
 
         loadingCourseSyllabusIDs.remove(courseID)
@@ -1097,7 +1241,7 @@ final class CanvasStore: ObservableObject {
             markCourseDetailAccess(courseID)
             persistCourseDetailCache()
         } catch {
-            errorMessage = error.localizedDescription
+            handleCourseDetailLoadFailure(error, courseID: courseID)
         }
 
         loadingCoursePeopleIDs.remove(courseID)
@@ -1200,7 +1344,7 @@ final class CanvasStore: ObservableObject {
                     return
                 }
 
-                await self.pruneCourseDetailMemoryCache()
+                self.pruneCourseDetailMemoryCache()
             }
         }
     }
@@ -1217,7 +1361,7 @@ final class CanvasStore: ObservableObject {
             now: currentDate,
             timeToLive: cachePolicy.memoryTimeToLive,
             maximumCourses: cachePolicy.maximumMemoryCourses,
-            alwaysKeepingCourseIDs: Set([selectedCourseID].compactMap { $0 })
+            alwaysKeepingCourseIDs: courseIDsToKeepInMemory
         )
 
         applyCourseDetailCache(prunedSnapshot)
@@ -1254,7 +1398,7 @@ final class CanvasStore: ObservableObject {
                 now: currentDate,
                 timeToLive: cachePolicy.memoryTimeToLive,
                 maximumCourses: cachePolicy.maximumMemoryCourses,
-                alwaysKeepingCourseIDs: Set([selectedCourseID].compactMap { $0 })
+                alwaysKeepingCourseIDs: courseIDsToKeepInMemory
             )
 
         applyCourseDetailCache(memorySnapshot)
@@ -1287,6 +1431,41 @@ final class CanvasStore: ObservableObject {
         courseDetailAccessDates = snapshot.courseAccessedAtByCourseID
     }
 
+    private func mergeCourseDetailCache(_ snapshot: CourseDetailCacheSnapshot) {
+        courseAssignmentsByCourseID.merge(snapshot.assignmentsByCourseID) { _, new in new }
+        courseModulesByCourseID.merge(snapshot.modulesByCourseID) { _, new in new }
+        courseFoldersByCourseID.merge(snapshot.foldersByCourseID) { _, new in new }
+        courseFilesByFolderID.merge(snapshot.filesByFolderID) { _, new in new }
+        courseAnnouncementsByCourseID.merge(snapshot.announcementsByCourseID) { _, new in new }
+        courseSyllabusByCourseID.merge(snapshot.syllabusByCourseID) { _, new in new }
+        coursePeopleByCourseID.merge(snapshot.peopleByCourseID) { _, new in new }
+        moduleItemDetailsByKey.merge(snapshot.moduleItemDetailsByKey) { _, new in new }
+        courseDetailAccessDates.merge(snapshot.courseAccessedAtByCourseID) { _, new in new }
+    }
+
+    private func handleCourseDetailLoadFailure(_ error: Error, courseID: Int) {
+        if restoreCachedCourseDetails(for: courseID) {
+            errorMessage = "Could not refresh Canvas. Showing cached data from offline storage."
+            return
+        }
+
+        errorMessage = error.localizedDescription
+    }
+
+    private func restoreCachedCourseDetails(for courseID: Int) -> Bool {
+        guard let snapshot = detailCacheManager.loadCache(validAt: now(), maximumAge: cachePolicy.diskTimeToLive) else {
+            return false
+        }
+
+        let courseSnapshot = snapshot.filteredForCourses([courseID])
+        guard courseSnapshot.containsDetails(for: courseID) else {
+            return false
+        }
+
+        mergeCourseDetailCache(courseSnapshot)
+        return true
+    }
+
     private func persistCourseDetailCache() {
         let validCourseIDs = Set(courses.map(\.id))
         let snapshot = buildCourseDetailCacheSnapshot(savedAt: now())
@@ -1301,6 +1480,21 @@ final class CanvasStore: ObservableObject {
 
     private func markCourseDetailAccess(_ courseID: Int) {
         courseDetailAccessDates[courseID] = now()
+    }
+
+    private var cachedCourseDetailIDs: Set<Int> {
+        Set(courseAssignmentsByCourseID.keys)
+            .union(courseModulesByCourseID.keys)
+            .union(courseFoldersByCourseID.keys)
+            .union(courseAnnouncementsByCourseID.keys)
+            .union(courseSyllabusByCourseID.keys)
+            .union(coursePeopleByCourseID.keys)
+            .union(moduleItemDetailsByKey.keys.compactMap { CourseModuleItemDetailKey(rawValue: $0).courseID })
+    }
+
+    private var courseIDsToKeepInMemory: Set<Int> {
+        coursePreferences.offlinePriorityCourseIDs
+            .union(Set([selectedCourseID].compactMap { $0 }))
     }
 
     private func persistCoursePreferences() {
@@ -1331,6 +1525,47 @@ final class CanvasStore: ObservableObject {
         fileDownloadSnapshot.recordsByFileID[file.id] = record
         fileDownloadSnapshot.updatedAt = now()
         persistFileDownloadSnapshot()
+    }
+
+    private func downloadCacheLimitError(for file: CanvasFile) -> String? {
+        guard let byteLimit = config.downloadCacheLimit.byteLimit else {
+            return nil
+        }
+
+        guard let fileSize = file.size else {
+            return nil
+        }
+
+        let reservedBytes = reservedDownloadByteCount(excludingFileID: file.id)
+        let projectedBytes = reservedBytes + fileSize
+        guard projectedBytes > byteLimit else {
+            return nil
+        }
+
+        let currentUsage = ByteCountFormatter.string(
+            fromByteCount: Int64(reservedBytes),
+            countStyle: .file
+        )
+        let limit = ByteCountFormatter.string(fromByteCount: Int64(byteLimit), countStyle: .file)
+        return "Download cache limit reached (\(currentUsage) of \(limit)). Clear downloaded files or raise the limit in Settings."
+    }
+
+    private func reservedDownloadByteCount(excludingFileID excludedFileID: Int) -> Int {
+        fileDownloadSnapshot.recordsByFileID.reduce(0) { total, element in
+            let (fileID, record) = element
+            guard fileID != excludedFileID else {
+                return total
+            }
+
+            switch record.state {
+            case .downloaded:
+                return total + (record.byteCount ?? record.file.size ?? 0)
+            case .downloading:
+                return total + (record.file.size ?? 0)
+            case .notDownloaded, .failed:
+                return total
+            }
+        }
     }
 
     private func markDownloadedFileMissing(_ record: FileDownloadRecord) {
@@ -1440,5 +1675,17 @@ final class CanvasStore: ObservableObject {
         }
 
         self.selectedCourseID = courses.first?.id
+    }
+}
+
+private extension CourseDetailCacheSnapshot {
+    func containsDetails(for courseID: Int) -> Bool {
+        assignmentsByCourseID[courseID] != nil
+            || modulesByCourseID[courseID] != nil
+            || foldersByCourseID[courseID] != nil
+            || announcementsByCourseID[courseID] != nil
+            || syllabusByCourseID[courseID] != nil
+            || peopleByCourseID[courseID] != nil
+            || moduleItemDetailsByKey.keys.contains { CourseModuleItemDetailKey(rawValue: $0).courseID == courseID }
     }
 }

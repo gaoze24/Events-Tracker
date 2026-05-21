@@ -85,7 +85,7 @@ struct DownloadsView: View {
                             fromByteCount: Int64(store.fileDownloadSnapshot.downloadedByteCount),
                             countStyle: .file
                         ),
-                        detail: "Tracked downloaded bytes.",
+                        detail: "Limit: \(store.localDataInventory.downloadCacheLimitLabel).",
                         systemImage: "externaldrive",
                         tint: .purple
                     )

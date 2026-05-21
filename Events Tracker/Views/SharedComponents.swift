@@ -222,6 +222,10 @@ struct MissingSubmissionRow: View {
 
 struct CourseListRow: View {
     let course: Course
+    var isPinned = false
+    var isHidden = false
+    var isDefault = false
+    var isOfflinePriority = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -241,6 +245,26 @@ struct CourseListRow: View {
             }
             .foregroundStyle(.secondary)
             .lineLimit(1)
+
+            if isPinned || isHidden || isDefault || isOfflinePriority {
+                HStack(spacing: 6) {
+                    if isDefault {
+                        PillBadge(text: "Default", tint: .blue)
+                    }
+
+                    if isPinned {
+                        PillBadge(text: "Pinned", tint: .purple)
+                    }
+
+                    if isOfflinePriority {
+                        PillBadge(text: "Offline", tint: .orange)
+                    }
+
+                    if isHidden {
+                        PillBadge(text: "Hidden", tint: .gray)
+                    }
+                }
+            }
         }
         .padding(.vertical, 4)
     }
