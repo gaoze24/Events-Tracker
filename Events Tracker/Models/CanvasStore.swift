@@ -32,6 +32,7 @@ final class CanvasStore: ObservableObject {
     @Published private(set) var coursePreferences: CoursePreferencesSnapshot
     @Published private(set) var fileDownloadSnapshot: FileDownloadSnapshot
     @Published private(set) var downloadingFileIDs: Set<Int>
+    @Published private(set) var offlineBulkDownloadProgress: OfflineBulkDownloadProgress?
     @Published private(set) var preloadingCourseIDs: Set<Int>
     @Published private(set) var recentSearchTerms: [String]
     @Published private(set) var inboxConversations: [CanvasConversation]
@@ -86,6 +87,7 @@ final class CanvasStore: ObservableObject {
         coursePreferences = preferenceManager.loadPreferences()
         fileDownloadSnapshot = fileDownloadManager.loadSnapshot()
         downloadingFileIDs = []
+        offlineBulkDownloadProgress = nil
         preloadingCourseIDs = []
         recentSearchTerms = recentSearchManager.loadTerms()
         inboxConversations = []
@@ -320,6 +322,7 @@ final class CanvasStore: ObservableObject {
             coursePreferences = CoursePreferencesSnapshot()
             fileDownloadSnapshot = FileDownloadSnapshot()
             downloadingFileIDs = []
+            offlineBulkDownloadProgress = nil
             preloadingCourseIDs = []
             try recentSearchManager.clearTerms()
             recentSearchTerms = []
@@ -542,6 +545,56 @@ final class CanvasStore: ObservableObject {
         snapshot.updatedAt = now()
         fileDownloadSnapshot = snapshot
         persistFileDownloadSnapshot()
+    }
+
+    func offlineDownloadPlan(selection: OfflineDownloadSelection) -> OfflineDownloadPlan {
+        var itemsByFileID: [Int: OfflineDownloadPlanItem] = [:]
+        var skippedByFileID: [Int: OfflineDownloadSkippedFile] = [:]
+
+        for courseID in selectedCourseIDs(from: selection) {
+            for folder in courseFoldersByCourseID[courseID] ?? [] {
+                addFiles(
+                    in: folder,
+                    courseID: courseID,
+                    itemsByFileID: &itemsByFileID,
+                    skippedByFileID: &skippedByFileID
+                )
+            }
+        }
+
+        for folderID in selection.selectedFolderIDs {
+            guard let courseID = courseID(containingFolderID: folderID),
+                  let folder = courseFoldersByCourseID[courseID]?.first(where: { $0.id == folderID })
+            else {
+                continue
+            }
+
+            addFiles(
+                in: folder,
+                courseID: courseID,
+                itemsByFileID: &itemsByFileID,
+                skippedByFileID: &skippedByFileID
+            )
+        }
+
+        for fileID in selection.selectedFileIDs {
+            guard let match = fileLocation(fileID: fileID) else {
+                continue
+            }
+
+            addFile(
+                match.file,
+                courseID: match.courseID,
+                folderID: match.folderID,
+                itemsByFileID: &itemsByFileID,
+                skippedByFileID: &skippedByFileID
+            )
+        }
+
+        return OfflineDownloadPlan(
+            items: itemsByFileID.values.sorted(by: offlineDownloadPlanItemPrecedes),
+            skippedFiles: skippedByFileID.values.sorted(by: offlineDownloadSkippedFilePrecedes)
+        )
     }
 
     func announcements(for courseID: Int?) -> [CourseAnnouncement] {
@@ -887,6 +940,40 @@ final class CanvasStore: ObservableObject {
         }
 
         downloadingFileIDs.remove(file.id)
+    }
+
+    func downloadOfflinePlan(_ plan: OfflineDownloadPlan) async {
+        guard config.isComplete else {
+            errorMessage = CanvasServiceError.incompleteConfiguration.localizedDescription
+            return
+        }
+
+        guard !plan.items.isEmpty else {
+            errorMessage = "Choose at least one available file to download."
+            return
+        }
+
+        if let limitError = downloadCacheLimitError(forAdditionalBytes: plan.estimatedByteCount) {
+            errorMessage = limitError
+            return
+        }
+
+        offlineBulkDownloadProgress = OfflineBulkDownloadProgress(
+            totalCount: plan.items.count,
+            completedCount: 0,
+            failedCount: 0,
+            skippedCount: plan.skippedCount
+        )
+
+        for item in plan.items {
+            await downloadFile(item.file, courseID: item.courseID)
+
+            if fileDownloadSnapshot.recordsByFileID[item.file.id]?.state == .downloaded {
+                offlineBulkDownloadProgress?.completedCount += 1
+            } else {
+                offlineBulkDownloadProgress?.failedCount += 1
+            }
+        }
     }
 
     func retryDownload(_ record: FileDownloadRecord) async {
@@ -1528,16 +1615,28 @@ final class CanvasStore: ObservableObject {
     }
 
     private func downloadCacheLimitError(for file: CanvasFile) -> String? {
-        guard let byteLimit = config.downloadCacheLimit.byteLimit else {
-            return nil
-        }
-
         guard let fileSize = file.size else {
             return nil
         }
 
-        let reservedBytes = reservedDownloadByteCount(excludingFileID: file.id)
-        let projectedBytes = reservedBytes + fileSize
+        let existingRecord = fileDownloadSnapshot.recordsByFileID[file.id]
+        let existingBytes: Int
+        if existingRecord?.state == .downloaded || existingRecord?.state == .downloading {
+            existingBytes = existingRecord?.byteCount ?? existingRecord?.file.size ?? 0
+        } else {
+            existingBytes = 0
+        }
+
+        return downloadCacheLimitError(forAdditionalBytes: fileSize - existingBytes)
+    }
+
+    private func downloadCacheLimitError(forAdditionalBytes additionalBytes: Int) -> String? {
+        guard let byteLimit = config.downloadCacheLimit.byteLimit else {
+            return nil
+        }
+
+        let reservedBytes = reservedDownloadByteCount(excludingFileID: -1)
+        let projectedBytes = reservedBytes + additionalBytes
         guard projectedBytes > byteLimit else {
             return nil
         }
@@ -1547,7 +1646,7 @@ final class CanvasStore: ObservableObject {
             countStyle: .file
         )
         let limit = ByteCountFormatter.string(fromByteCount: Int64(byteLimit), countStyle: .file)
-        return "Download cache limit reached (\(currentUsage) of \(limit)). Clear downloaded files or raise the limit in Settings."
+        return "Download cache limit reached (\(currentUsage) of \(limit)). Reduce the offline selection, clear downloaded files, or raise the limit in Settings."
     }
 
     private func reservedDownloadByteCount(excludingFileID excludedFileID: Int) -> Int {
@@ -1657,10 +1756,156 @@ final class CanvasStore: ObservableObject {
         courseDetailAccessDates = [:]
     }
 
+    private func selectedCourseIDs(from selection: OfflineDownloadSelection) -> [Int] {
+        selection.selectedCourseIDs
+            .filter { courseID in courses.contains { $0.id == courseID } }
+            .sorted()
+    }
+
+    private func addFiles(
+        in folder: CanvasFolder,
+        courseID: Int,
+        itemsByFileID: inout [Int: OfflineDownloadPlanItem],
+        skippedByFileID: inout [Int: OfflineDownloadSkippedFile]
+    ) {
+        for file in courseFilesByFolderID[folder.id] ?? [] {
+            addFile(
+                file,
+                courseID: courseID,
+                folderID: folder.id,
+                itemsByFileID: &itemsByFileID,
+                skippedByFileID: &skippedByFileID
+            )
+        }
+    }
+
+    private func addFile(
+        _ file: CanvasFile,
+        courseID: Int,
+        folderID: Int?,
+        itemsByFileID: inout [Int: OfflineDownloadPlanItem],
+        skippedByFileID: inout [Int: OfflineDownloadSkippedFile]
+    ) {
+        if itemsByFileID[file.id] != nil || skippedByFileID[file.id] != nil {
+            return
+        }
+
+        if let record = fileDownloadSnapshot.recordsByFileID[file.id] {
+            switch record.state {
+            case .downloaded:
+                skippedByFileID[file.id] = OfflineDownloadSkippedFile(
+                    courseID: courseID,
+                    folderID: folderID,
+                    file: file,
+                    reason: .alreadyDownloaded
+                )
+                return
+            case .downloading:
+                skippedByFileID[file.id] = OfflineDownloadSkippedFile(
+                    courseID: courseID,
+                    folderID: folderID,
+                    file: file,
+                    reason: .alreadyDownloading
+                )
+                return
+            case .failed, .notDownloaded:
+                break
+            }
+        }
+
+        if file.isUnavailable {
+            skippedByFileID[file.id] = OfflineDownloadSkippedFile(
+                courseID: courseID,
+                folderID: folderID,
+                file: file,
+                reason: .unavailable
+            )
+            return
+        }
+
+        if file.url == nil {
+            skippedByFileID[file.id] = OfflineDownloadSkippedFile(
+                courseID: courseID,
+                folderID: folderID,
+                file: file,
+                reason: .missingDownloadURL
+            )
+            return
+        }
+
+        itemsByFileID[file.id] = OfflineDownloadPlanItem(courseID: courseID, folderID: folderID, file: file)
+    }
+
+    private func offlineDownloadPlanItemPrecedes(
+        _ lhs: OfflineDownloadPlanItem,
+        _ rhs: OfflineDownloadPlanItem
+    ) -> Bool {
+        offlineDownloadPlanSortKeyPrecedes(
+            lhsFile: lhs.file,
+            lhsCourseID: lhs.courseID,
+            lhsFolderID: lhs.folderID,
+            rhsFile: rhs.file,
+            rhsCourseID: rhs.courseID,
+            rhsFolderID: rhs.folderID
+        )
+    }
+
+    private func offlineDownloadSkippedFilePrecedes(
+        _ lhs: OfflineDownloadSkippedFile,
+        _ rhs: OfflineDownloadSkippedFile
+    ) -> Bool {
+        offlineDownloadPlanSortKeyPrecedes(
+            lhsFile: lhs.file,
+            lhsCourseID: lhs.courseID,
+            lhsFolderID: lhs.folderID,
+            rhsFile: rhs.file,
+            rhsCourseID: rhs.courseID,
+            rhsFolderID: rhs.folderID
+        )
+    }
+
+    private func offlineDownloadPlanSortKeyPrecedes(
+        lhsFile: CanvasFile,
+        lhsCourseID: Int,
+        lhsFolderID: Int?,
+        rhsFile: CanvasFile,
+        rhsCourseID: Int,
+        rhsFolderID: Int?
+    ) -> Bool {
+        let nameComparison = lhsFile.name.localizedCaseInsensitiveCompare(rhsFile.name)
+        if nameComparison != .orderedSame {
+            return nameComparison == .orderedAscending
+        }
+
+        if lhsCourseID != rhsCourseID {
+            return lhsCourseID < rhsCourseID
+        }
+
+        let lhsFolderSortID = lhsFolderID ?? -1
+        let rhsFolderSortID = rhsFolderID ?? -1
+        if lhsFolderSortID != rhsFolderSortID {
+            return lhsFolderSortID < rhsFolderSortID
+        }
+
+        return lhsFile.id < rhsFile.id
+    }
+
     private func courseID(containingFolderID folderID: Int) -> Int? {
         courseFoldersByCourseID.first { _, folders in
             folders.contains { $0.id == folderID }
         }?.key
+    }
+
+    private func fileLocation(fileID: Int) -> (courseID: Int, folderID: Int?, file: CanvasFile)? {
+        for (courseID, folders) in courseFoldersByCourseID {
+            for folder in folders {
+                if let file = courseFilesByFolderID[folder.id]?.first(where: { $0.id == fileID }) {
+                    return (courseID, folder.id, file)
+                }
+            }
+        }
+
+        return nil
     }
 
     private func applySnapshot(_ snapshot: CanvasSnapshot) {

@@ -1625,6 +1625,179 @@ struct Events_TrackerTests {
         #expect(!file.isUnavailable)
     }
 
+    @Test func offlineDownloadPlanSummarizesEligibleAndSkippedFiles() async throws {
+        let eligible = makeCanvasFile(id: 10, name: "Lecture.pdf", size: 2_048)
+        let unknownSize = makeCanvasFile(id: 11, name: "Slides.pdf", size: nil)
+        let unavailable = makeCanvasFile(id: 12, name: "Locked.pdf")
+
+        let plan = OfflineDownloadPlan(
+            items: [
+                OfflineDownloadPlanItem(courseID: 42, folderID: 7, file: eligible),
+                OfflineDownloadPlanItem(courseID: 42, folderID: 7, file: unknownSize)
+            ],
+            skippedFiles: [
+                OfflineDownloadSkippedFile(
+                    courseID: 42,
+                    folderID: 7,
+                    file: unavailable,
+                    reason: .unavailable
+                )
+            ]
+        )
+
+        #expect(plan.fileCount == 2)
+        #expect(plan.estimatedByteCount == 2_048)
+        #expect(plan.unknownSizeCount == 1)
+        #expect(plan.skippedCount == 1)
+        #expect(plan.skippedCount(for: .unavailable) == 1)
+    }
+
+    @MainActor
+    @Test func canvasStoreBuildsOfflineDownloadPlanFromCourseFolderAndFileSelections() async throws {
+        let course = makeCourse(id: 42, name: "Biology")
+        let rootFolder = makeCanvasFolder(id: 100, name: "Root", filesCount: 2)
+        let labFolder = makeCanvasFolder(id: 101, name: "Labs", filesCount: 1)
+        let lecture = makeCanvasFile(id: 1, name: "Lecture.pdf", folderID: 100, url: URL(string: "https://canvas.example.edu/files/1/download"), size: 1_024)
+        let worksheet = makeCanvasFile(id: 2, name: "Worksheet.pdf", folderID: 100, url: URL(string: "https://canvas.example.edu/files/2/download"), size: 2_048)
+        let lab = makeCanvasFile(id: 3, name: "Lab.pdf", folderID: 101, url: URL(string: "https://canvas.example.edu/files/3/download"), size: 4_096)
+        let harness = try makeCanvasStoreHarness(
+            courses: [course],
+            foldersByCourseID: [42: [rootFolder, labFolder]],
+            filesByFolderID: [100: [lecture, worksheet], 101: [lab]]
+        )
+        defer { harness.cleanup() }
+
+        let plan = harness.store.offlineDownloadPlan(
+            selection: OfflineDownloadSelection(
+                selectedCourseIDs: [],
+                selectedFolderIDs: [100],
+                selectedFileIDs: [3]
+            )
+        )
+
+        #expect(plan.items.map(\.file.id).sorted() == [1, 2, 3])
+        #expect(plan.estimatedByteCount == 7_168)
+    }
+
+    @MainActor
+    @Test func canvasStoreOfflineDownloadPlanSkipsUnavailableDownloadedAndDownloadingFiles() async throws {
+        let course = makeCourse(id: 42, name: "Biology")
+        let folder = makeCanvasFolder(id: 100, name: "Root", filesCount: 4)
+        let available = makeCanvasFile(id: 1, name: "Available.pdf", folderID: 100, url: URL(string: "https://canvas.example.edu/files/1/download"))
+        let locked = makeCanvasFile(id: 2, name: "Locked.pdf", folderID: 100, url: URL(string: "https://canvas.example.edu/files/2/download"), lockedForUser: true)
+        let downloaded = makeCanvasFile(id: 3, name: "Downloaded.pdf", folderID: 100, url: URL(string: "https://canvas.example.edu/files/3/download"))
+        let downloading = makeCanvasFile(id: 4, name: "Downloading.pdf", folderID: 100, url: URL(string: "https://canvas.example.edu/files/block-first"))
+        let downloadedURL = FileManager.default.temporaryDirectory.appendingPathComponent("EventsTracker-\(UUID().uuidString)-downloaded.pdf")
+        try Data("downloaded".utf8).write(to: downloadedURL)
+        defer { try? FileManager.default.removeItem(at: downloadedURL) }
+        let downloadSnapshot = FileDownloadSnapshot(recordsByFileID: [
+            downloaded.id: FileDownloadRecord(fileID: downloaded.id, courseID: 42, folderID: 100, file: downloaded, state: .downloaded, localPath: downloadedURL.path, downloadedAt: Date(), byteCount: 1_024)
+        ])
+        let session = BlockingDownloadURLProtocol.makeSession()
+        let harness = try makeCanvasStoreHarness(
+            courses: [course],
+            foldersByCourseID: [42: [folder]],
+            filesByFolderID: [100: [available, locked, downloaded, downloading]],
+            fileDownloadSnapshot: downloadSnapshot,
+            session: session
+        )
+        defer { harness.cleanup() }
+        let downloadTask = Task {
+            await harness.store.downloadFile(downloading, courseID: 42)
+        }
+        #expect(await BlockingDownloadURLProtocol.waitUntilStarted())
+
+        let plan = harness.store.offlineDownloadPlan(
+            selection: OfflineDownloadSelection(selectedCourseIDs: [42])
+        )
+        BlockingDownloadURLProtocol.release()
+        await downloadTask.value
+
+        #expect(plan.items.map(\.file.id) == [available.id])
+        #expect(plan.skippedCount(for: .unavailable) == 1)
+        #expect(plan.skippedCount(for: .alreadyDownloaded) == 1)
+        #expect(plan.skippedCount(for: .alreadyDownloading) == 1)
+    }
+
+    @MainActor
+    @Test func canvasStoreOfflineDownloadPlanSortsDuplicateFileNamesDeterministically() async throws {
+        let course = makeCourse(id: 1, name: "Biology")
+        let folder = makeCanvasFolder(id: 20, name: "Files", filesCount: 11)
+        let itemIDs = [130, 105, 111, 109, 170, 103, 150, 101]
+        let duplicateItems = itemIDs.map { fileID in
+            makeCanvasFile(
+                id: fileID,
+                name: fileID.isMultiple(of: 2) ? "DUPLICATE.pdf" : "duplicate.pdf",
+                folderID: 20,
+                url: URL(string: "https://canvas.example.edu/files/\(fileID)/download")
+            )
+        }
+        let missingDownloadURL = makeCanvasFile(id: 220, name: "skip.pdf", folderID: 20, url: nil)
+        let downloaded = makeCanvasFile(id: 260, name: "skip.PDF", folderID: 20, url: URL(string: "https://canvas.example.edu/files/260/download"))
+        let unavailable = makeCanvasFile(id: 280, name: "Skip.pdf", folderID: 20, url: URL(string: "https://canvas.example.edu/files/280/download"), lockedForUser: true)
+        let downloadedURL = FileManager.default.temporaryDirectory.appendingPathComponent("EventsTracker-\(UUID().uuidString)-downloaded.pdf")
+        try Data("downloaded".utf8).write(to: downloadedURL)
+        defer { try? FileManager.default.removeItem(at: downloadedURL) }
+        let downloadSnapshot = FileDownloadSnapshot(recordsByFileID: [
+            downloaded.id: FileDownloadRecord(fileID: downloaded.id, courseID: 1, folderID: 20, file: downloaded, state: .downloaded, localPath: downloadedURL.path, downloadedAt: Date(), byteCount: 1_024)
+        ])
+        let harness = try makeCanvasStoreHarness(
+            courses: [course],
+            foldersByCourseID: [1: [folder]],
+            filesByFolderID: [
+                20: duplicateItems + [unavailable, missingDownloadURL, downloaded]
+            ],
+            fileDownloadSnapshot: downloadSnapshot
+        )
+        defer { harness.cleanup() }
+
+        let plan = harness.store.offlineDownloadPlan(
+            selection: OfflineDownloadSelection(selectedCourseIDs: [1])
+        )
+
+        #expect(plan.items.map(\.file.id) == itemIDs.sorted())
+        #expect(plan.skippedFiles.map(\.file.id) == [220, 260, 280])
+    }
+
+    @MainActor
+    @Test func canvasStoreOfflineDownloadPlanPrioritizesLocalDownloadStateSkipReasons() async throws {
+        let course = makeCourse(id: 42, name: "Biology")
+        let folder = makeCanvasFolder(id: 100, name: "Root", filesCount: 2)
+        let downloaded = makeCanvasFile(id: 1, name: "Downloaded.pdf", folderID: 100, url: nil, lockedForUser: true)
+        let downloading = makeCanvasFile(id: 2, name: "Downloading.pdf", folderID: 100, url: URL(string: "https://canvas.example.edu/files/2/download"), lockedForUser: true)
+        let activeDownloading = makeCanvasFile(id: 2, name: "Downloading.pdf", folderID: 100, url: URL(string: "https://canvas.example.edu/files/block-first"))
+        let downloadedURL = FileManager.default.temporaryDirectory.appendingPathComponent("EventsTracker-\(UUID().uuidString)-downloaded.pdf")
+        try Data("downloaded".utf8).write(to: downloadedURL)
+        defer { try? FileManager.default.removeItem(at: downloadedURL) }
+        let downloadSnapshot = FileDownloadSnapshot(recordsByFileID: [
+            downloaded.id: FileDownloadRecord(fileID: downloaded.id, courseID: 42, folderID: 100, file: downloaded, state: .downloaded, localPath: downloadedURL.path, downloadedAt: Date(), byteCount: 1_024)
+        ])
+        let session = BlockingDownloadURLProtocol.makeSession()
+        let harness = try makeCanvasStoreHarness(
+            courses: [course],
+            foldersByCourseID: [42: [folder]],
+            filesByFolderID: [100: [downloaded, downloading]],
+            fileDownloadSnapshot: downloadSnapshot,
+            session: session
+        )
+        defer { harness.cleanup() }
+        let downloadTask = Task {
+            await harness.store.downloadFile(activeDownloading, courseID: 42)
+        }
+        #expect(await BlockingDownloadURLProtocol.waitUntilStarted())
+
+        let plan = harness.store.offlineDownloadPlan(
+            selection: OfflineDownloadSelection(selectedCourseIDs: [42])
+        )
+        BlockingDownloadURLProtocol.release()
+        await downloadTask.value
+
+        #expect(plan.skippedCount(for: .alreadyDownloaded) == 1)
+        #expect(plan.skippedCount(for: .alreadyDownloading) == 1)
+        #expect(plan.skippedCount(for: .unavailable) == 0)
+        #expect(plan.skippedCount(for: .missingDownloadURL) == 0)
+    }
+
     @Test func canvasFolderBuildsItemSummaryAndUnavailableState() async throws {
         let folder = CanvasFolder(
             id: 42,
@@ -2272,6 +2445,95 @@ struct Events_TrackerTests {
     }
 
     @MainActor
+    @Test func canvasStoreBlocksOfflineBulkDownloadPlanThatExceedsCacheLimit() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let fileMetadataURL = makeFileDownloadMetadataTempURL()
+        let downloadsURL = makeDownloadsTempDirectoryURL()
+        let fileManager = FileManager.default
+        [configURL, fileMetadataURL, downloadsURL].forEach { try? fileManager.removeItem(at: $0) }
+        defer { [configURL, fileMetadataURL, downloadsURL].forEach { try? fileManager.removeItem(at: $0) } }
+
+        let configManager = CanvasConfigManager(configURL: configURL, tokenStore: InMemoryCanvasTokenStore())
+        try configManager.saveConfig(makeCanvasConfig(downloadCacheLimit: .oneGB))
+
+        let manager = FileDownloadManager(metadataURL: fileMetadataURL, downloadsDirectory: downloadsURL)
+        let existingFile = makeCanvasFile(id: 1, name: "Existing.pdf", size: 1_024)
+        let existingURL = manager.localURL(for: existingFile, courseID: 42)
+        try fileManager.createDirectory(at: existingURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("existing".utf8).write(to: existingURL)
+        try manager.saveSnapshot(FileDownloadSnapshot(recordsByFileID: [
+            existingFile.id: FileDownloadRecord(
+                fileID: existingFile.id,
+                courseID: 42,
+                folderID: 100,
+                file: existingFile,
+                state: .downloaded,
+                localPath: existingURL.path,
+                downloadedAt: Date(),
+                byteCount: DownloadCacheLimitPreset.oneGB.byteLimit! - 512
+            )
+        ]))
+
+        let session = makeCapturingURLSession { request in
+            Issue.record("Bulk download request should not start when cache limit would be exceeded")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data("unexpected".utf8))
+        }
+        let store = CanvasStore(
+            configManager: configManager,
+            fileDownloadManager: FileDownloadManager(metadataURL: fileMetadataURL, downloadsDirectory: downloadsURL, session: session)
+        )
+        let file = makeCanvasFile(id: 2, name: "TooLarge.pdf", folderID: 100, url: URL(string: "https://canvas.example.edu/files/2/download"), size: 1_024)
+        let plan = OfflineDownloadPlan(items: [
+            OfflineDownloadPlanItem(courseID: 42, folderID: 100, file: file)
+        ])
+
+        await store.downloadOfflinePlan(plan)
+
+        #expect(store.fileDownloadSnapshot.recordsByFileID[file.id] == nil)
+        #expect(store.errorMessage?.contains("Download cache limit") == true)
+    }
+
+    @MainActor
+    @Test func canvasStoreDownloadsAllowedOfflineBulkPlanSerially() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let fileMetadataURL = makeFileDownloadMetadataTempURL()
+        let downloadsURL = makeDownloadsTempDirectoryURL()
+        let fileManager = FileManager.default
+        [configURL, fileMetadataURL, downloadsURL].forEach { try? fileManager.removeItem(at: $0) }
+        defer { [configURL, fileMetadataURL, downloadsURL].forEach { try? fileManager.removeItem(at: $0) } }
+
+        let configManager = CanvasConfigManager(configURL: configURL, tokenStore: InMemoryCanvasTokenStore())
+        try configManager.saveConfig(makeCanvasConfig(downloadCacheLimit: .oneGB))
+
+        var requestedPaths: [String] = []
+        let session = makeCapturingURLSession { request in
+            requestedPaths.append(request.url?.path ?? "")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data("download".utf8))
+        }
+
+        let store = CanvasStore(
+            configManager: configManager,
+            fileDownloadManager: FileDownloadManager(metadataURL: fileMetadataURL, downloadsDirectory: downloadsURL, session: session)
+        )
+        let first = makeCanvasFile(id: 1, name: "A.pdf", folderID: 100, url: URL(string: "https://canvas.example.edu/files/1/download"), size: 1_024)
+        let second = makeCanvasFile(id: 2, name: "B.pdf", folderID: 100, url: URL(string: "https://canvas.example.edu/files/2/download"), size: 1_024)
+        let plan = OfflineDownloadPlan(items: [
+            OfflineDownloadPlanItem(courseID: 42, folderID: 100, file: first),
+            OfflineDownloadPlanItem(courseID: 42, folderID: 100, file: second)
+        ])
+
+        await store.downloadOfflinePlan(plan)
+
+        #expect(store.fileDownloadSnapshot.recordsByFileID[first.id]?.state == .downloaded)
+        #expect(store.fileDownloadSnapshot.recordsByFileID[second.id]?.state == .downloaded)
+        #expect(store.offlineBulkDownloadProgress?.completedCount == 2)
+        #expect(store.offlineBulkDownloadProgress?.failedCount == 0)
+        #expect(requestedPaths == ["/files/1/download", "/files/2/download"])
+    }
+
+    @MainActor
     @Test func canvasStoreCountsInProgressDownloadsTowardConfiguredCacheLimit() async throws {
         let configURL = makeCanvasConfigTempURL()
         let dashboardCacheURL = makeDashboardCacheTempURL()
@@ -2581,6 +2843,80 @@ struct Events_TrackerTests {
         )
     }
 
+    private struct CanvasStoreHarness {
+        let store: CanvasStore
+        let cleanup: () -> Void
+    }
+
+    @MainActor
+    private func makeCanvasStoreHarness(
+        courses: [Course],
+        foldersByCourseID: [Int: [CanvasFolder]],
+        filesByFolderID: [Int: [CanvasFile]],
+        fileDownloadSnapshot: FileDownloadSnapshot = FileDownloadSnapshot(),
+        config: CanvasConfig = CanvasConfig(
+            baseURL: "https://canvas.example.edu",
+            token: "token",
+            lookaheadDays: 14
+        ),
+        session: URLSession = .shared
+    ) throws -> CanvasStoreHarness {
+        let configURL = makeCanvasConfigTempURL()
+        let dashboardCacheURL = makeDashboardCacheTempURL()
+        let courseDetailCacheURL = makeCourseDetailCacheTempURL()
+        let fileMetadataURL = makeFileDownloadMetadataTempURL()
+        let downloadsURL = makeDownloadsTempDirectoryURL()
+        let urls = [configURL, dashboardCacheURL, courseDetailCacheURL, fileMetadataURL, downloadsURL]
+        urls.forEach { try? FileManager.default.removeItem(at: $0) }
+
+        let configManager = CanvasConfigManager(configURL: configURL, tokenStore: InMemoryCanvasTokenStore())
+        try configManager.saveConfig(config)
+
+        let databaseManager = DatabaseManager(cacheURL: dashboardCacheURL)
+        try databaseManager.saveSnapshot(CanvasSnapshot(
+            courses: courses,
+            upcomingEvents: [],
+            missingSubmissions: [],
+            profile: nil,
+            syncedAt: Date()
+        ))
+
+        let detailCacheManager = CourseDetailCacheManager(cacheURL: courseDetailCacheURL)
+        try detailCacheManager.saveCache(CourseDetailCacheSnapshot(
+            assignmentsByCourseID: [:],
+            modulesByCourseID: [:],
+            foldersByCourseID: foldersByCourseID,
+            filesByFolderID: filesByFolderID,
+            announcementsByCourseID: [:],
+            syllabusByCourseID: [:],
+            peopleByCourseID: [:],
+            courseAccessedAtByCourseID: Dictionary(uniqueKeysWithValues: foldersByCourseID.keys.map { ($0, Date()) }),
+            savedAt: Date()
+        ))
+
+        let fileDownloadManager = FileDownloadManager(
+            metadataURL: fileMetadataURL,
+            downloadsDirectory: downloadsURL,
+            session: session
+        )
+        try fileDownloadManager.saveSnapshot(fileDownloadSnapshot)
+
+        let store = CanvasStore(
+            configManager: configManager,
+            databaseManager: databaseManager,
+            networkManager: .shared,
+            detailCacheManager: detailCacheManager,
+            fileDownloadManager: fileDownloadManager
+        )
+
+        return CanvasStoreHarness(
+            store: store,
+            cleanup: {
+                urls.forEach { try? FileManager.default.removeItem(at: $0) }
+            }
+        )
+    }
+
     private func makeCoursePerson(id: Int, name: String, role: String) -> CoursePerson {
         CoursePerson(
             id: id,
@@ -2618,13 +2954,18 @@ struct Events_TrackerTests {
         )
     }
 
-    private func makeCanvasFolder(id: Int, name: String) -> CanvasFolder {
+    private func makeCanvasFolder(
+        id: Int,
+        name: String,
+        parentFolderID: Int? = nil,
+        filesCount: Int? = 0
+    ) -> CanvasFolder {
         CanvasFolder(
             id: id,
             name: name,
             fullName: "Course Files/\(name)",
-            parentFolderID: nil,
-            filesCount: nil,
+            parentFolderID: parentFolderID,
+            filesCount: filesCount,
             foldersCount: nil,
             position: nil,
             locked: nil,
@@ -2651,7 +2992,8 @@ struct Events_TrackerTests {
         name: String,
         folderID: Int? = nil,
         url: URL? = nil,
-        size: Int? = 1_024
+        size: Int? = 1_024,
+        lockedForUser: Bool? = nil
     ) -> CanvasFile {
         CanvasFile(
             id: id,
@@ -2668,7 +3010,7 @@ struct Events_TrackerTests {
             unlockAt: nil,
             locked: nil,
             hidden: nil,
-            lockedForUser: nil,
+            lockedForUser: lockedForUser,
             hiddenForUser: nil,
             thumbnailURL: nil
         )
