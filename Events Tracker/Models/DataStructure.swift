@@ -924,6 +924,15 @@ struct FileDownloadRecord: Codable, Identifiable, Hashable {
         state == .downloaded && localPath != nil
     }
 
+    var localPreviewURL: URL? {
+        guard state == .downloaded, let localPath else {
+            return nil
+        }
+
+        let url = URL(fileURLWithPath: localPath)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
     var typeLabel: String {
         guard let contentType = file.contentType?.trimmingCharacters(in: .whitespacesAndNewlines), !contentType.isEmpty else {
             return "Unknown"
@@ -1879,6 +1888,134 @@ struct CalendarEventItem: Identifiable, Hashable {
         }
 
         return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+    }
+}
+
+enum CanvasConversationWorkflowState: String, Codable, CaseIterable, Hashable, Identifiable {
+    case read
+    case unread
+    case archived
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .read:
+            return "Read"
+        case .unread:
+            return "Unread"
+        case .archived:
+            return "Archived"
+        }
+    }
+}
+
+struct CanvasConversationParticipant: Codable, Identifiable, Hashable {
+    let id: Int
+    let name: String
+    let fullName: String?
+    let avatarURL: URL?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case fullName = "full_name"
+        case avatarURL = "avatar_url"
+    }
+
+    var displayName: String {
+        let preferredName = fullName ?? name
+        let trimmedName = preferredName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedName.isEmpty ? "Unknown Participant" : trimmedName
+    }
+}
+
+struct CanvasConversationAudienceContexts: Codable, Hashable {
+    let courses: [String: [String]]
+    let groups: [String: [String]]
+
+    var courseIDs: [Int] {
+        courses.keys.compactMap(Int.init).sorted()
+    }
+}
+
+struct CanvasConversation: Codable, Identifiable, Hashable {
+    let id: Int
+    let subject: String?
+    let workflowState: CanvasConversationWorkflowState
+    let lastMessage: String?
+    let lastMessageAt: Date?
+    let messageCount: Int?
+    let subscribed: Bool?
+    let starred: Bool?
+    let audienceContexts: CanvasConversationAudienceContexts?
+    let avatarURL: URL?
+    let participants: [CanvasConversationParticipant]?
+    let visible: Bool?
+    let contextName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case subject
+        case workflowState = "workflow_state"
+        case lastMessage = "last_message"
+        case lastMessageAt = "last_message_at"
+        case messageCount = "message_count"
+        case subscribed
+        case starred
+        case audienceContexts = "audience_contexts"
+        case avatarURL = "avatar_url"
+        case participants
+        case visible
+        case contextName = "context_name"
+    }
+
+    var displaySubject: String {
+        let trimmedSubject = subject?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmedSubject.isEmpty ? "No Subject" : trimmedSubject
+    }
+
+    var isUnread: Bool {
+        workflowState == .unread
+    }
+
+    var isArchived: Bool {
+        workflowState == .archived
+    }
+
+    var courseIDs: [Int] {
+        audienceContexts?.courseIDs ?? []
+    }
+
+    var participantSummary: String {
+        let names = (participants ?? []).map(\.displayName).filter { !$0.isEmpty }
+        return names.isEmpty ? "No participants" : names.joined(separator: ", ")
+    }
+
+    func canvasURL(baseURL: String) -> URL? {
+        guard var components = URLComponents(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return nil
+        }
+
+        var basePath = components.path.replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
+        if basePath.hasSuffix("/api/v1") {
+            basePath = String(basePath.dropLast("/api/v1".count))
+        }
+
+        components.path = basePath + "/conversations/\(id)"
+        components.queryItems = nil
+        return components.url
+    }
+
+    func matchesSearch(_ query: String) -> Bool {
+        workspaceSearchMatches(
+            query,
+            in: displaySubject,
+            lastMessage,
+            participantSummary,
+            contextName,
+            workflowState.label
+        )
     }
 }
 

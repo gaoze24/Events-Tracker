@@ -33,6 +33,9 @@ final class CanvasStore: ObservableObject {
     @Published private(set) var fileDownloadSnapshot: FileDownloadSnapshot
     @Published private(set) var downloadingFileIDs: Set<Int>
     @Published private(set) var recentSearchTerms: [String]
+    @Published private(set) var inboxConversations: [CanvasConversation]
+    @Published private(set) var loadingInbox: Bool
+    @Published private(set) var inboxLastLoadedAt: Date?
     @Published private(set) var upcomingEvents: [UpcomingEvent]
     @Published private(set) var missingSubmissions: [MissingSubmission]
     @Published private(set) var profile: UserProfile?
@@ -83,6 +86,9 @@ final class CanvasStore: ObservableObject {
         fileDownloadSnapshot = fileDownloadManager.loadSnapshot()
         downloadingFileIDs = []
         recentSearchTerms = recentSearchManager.loadTerms()
+        inboxConversations = []
+        loadingInbox = false
+        inboxLastLoadedAt = nil
         reminderService = AssignmentReminderService(
             config: savedConfig,
             networkManager: networkManager,
@@ -276,6 +282,9 @@ final class CanvasStore: ObservableObject {
             downloadingFileIDs = []
             try recentSearchManager.clearTerms()
             recentSearchTerms = []
+            inboxConversations = []
+            loadingInbox = false
+            inboxLastLoadedAt = nil
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -885,6 +894,72 @@ final class CanvasStore: ObservableObject {
         }
     }
 
+    func loadInboxConversationsIfNeeded() async {
+        guard inboxConversations.isEmpty else {
+            return
+        }
+
+        await loadInboxConversations()
+    }
+
+    func refreshInboxConversations() async {
+        await loadInboxConversations()
+    }
+
+    func loadInboxConversations() async {
+        guard config.isComplete else {
+            errorMessage = CanvasServiceError.incompleteConfiguration.localizedDescription
+            return
+        }
+
+        guard !loadingInbox else {
+            return
+        }
+
+        loadingInbox = true
+        errorMessage = nil
+
+        do {
+            async let activeConversationsTask = networkManager.fetchConversations(using: config)
+            async let archivedConversationsTask = networkManager.fetchConversations(scope: .archived, using: config)
+            let conversations = try await activeConversationsTask + archivedConversationsTask
+            var seenConversationIDs: Set<Int> = []
+            inboxConversations = conversations
+                .filter { seenConversationIDs.insert($0.id).inserted }
+                .sorted(by: sortInboxConversations)
+            inboxLastLoadedAt = now()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        loadingInbox = false
+    }
+
+    func markConversationRead(_ conversation: CanvasConversation) async {
+        await updateConversationWorkflowState(conversation, state: .read)
+    }
+
+    func markConversationUnread(_ conversation: CanvasConversation) async {
+        await updateConversationWorkflowState(conversation, state: .unread)
+    }
+
+    func archiveConversation(_ conversation: CanvasConversation) async {
+        await updateConversationWorkflowState(conversation, state: .archived)
+    }
+
+    func quickLookURL(for record: FileDownloadRecord) -> URL? {
+        if let url = record.localPreviewURL {
+            return url
+        }
+
+        if record.state == .downloaded {
+            markDownloadedFileMissing(record)
+        }
+
+        errorMessage = FileDownloadError.missingLocalFile.localizedDescription
+        return nil
+    }
+
     func openDownloadedFile(_ record: FileDownloadRecord) {
         guard let localPath = record.localPath else {
             errorMessage = FileDownloadError.missingLocalFile.localizedDescription
@@ -1268,6 +1343,47 @@ final class CanvasStore: ObservableObject {
         fileDownloadSnapshot.recordsByFileID[record.fileID] = updatedRecord
         fileDownloadSnapshot.updatedAt = now()
         persistFileDownloadSnapshot()
+    }
+
+    private func updateConversationWorkflowState(
+        _ conversation: CanvasConversation,
+        state: CanvasConversationWorkflowState
+    ) async {
+        guard config.isComplete else {
+            errorMessage = CanvasServiceError.incompleteConfiguration.localizedDescription
+            return
+        }
+
+        do {
+            let updatedConversation = try await networkManager.updateConversationWorkflowState(
+                conversationID: conversation.id,
+                state: state,
+                using: config
+            )
+            if let index = inboxConversations.firstIndex(where: { $0.id == conversation.id }) {
+                inboxConversations[index] = updatedConversation
+                inboxConversations.sort(by: sortInboxConversations)
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func sortInboxConversations(_ lhs: CanvasConversation, _ rhs: CanvasConversation) -> Bool {
+        switch (lhs.lastMessageAt, rhs.lastMessageAt) {
+        case let (left?, right?):
+            if left != right {
+                return left > right
+            }
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        case (.none, .none):
+            break
+        }
+
+        return lhs.displaySubject.localizedCaseInsensitiveCompare(rhs.displaySubject) == .orderedAscending
     }
 
     private func persistFileDownloadSnapshot() {

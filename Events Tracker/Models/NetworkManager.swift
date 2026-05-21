@@ -206,6 +206,50 @@ final class NetworkManager {
         }
     }
 
+    func fetchConversations(
+        scope: CanvasConversationWorkflowState? = nil,
+        filterCourseID: Int? = nil,
+        using config: CanvasConfig
+    ) async throws -> [CanvasConversation] {
+        var queryItems = [
+            URLQueryItem(name: "include[]", value: "participant_avatars"),
+            URLQueryItem(name: "per_page", value: "100")
+        ]
+
+        if let scope, scope != .read {
+            queryItems.append(URLQueryItem(name: "scope", value: scope.rawValue))
+        }
+
+        if let filterCourseID {
+            queryItems.append(URLQueryItem(name: "filter[]", value: "course_\(filterCourseID)"))
+        }
+
+        let conversations: [CanvasConversation] = try await requestPaginatedArray(
+            path: "/api/v1/conversations",
+            queryItems: queryItems,
+            config: config
+        )
+
+        return conversations.sorted(by: Self.sortConversations)
+    }
+
+    func updateConversationWorkflowState(
+        conversationID: Int,
+        state: CanvasConversationWorkflowState,
+        using config: CanvasConfig
+    ) async throws -> CanvasConversation {
+        try await requestFormEncoded(
+            path: "/api/v1/conversations/\(conversationID)",
+            queryItems: [],
+            formItems: [
+                URLQueryItem(name: "conversation[workflow_state]", value: state.rawValue)
+            ],
+            method: "PUT",
+            config: config,
+            responseType: CanvasConversation.self
+        )
+    }
+
     func fetchQuizDetail(courseID: Int, quizID: Int, using config: CanvasConfig) async throws -> CourseQuizDetail {
         try await request(
             path: "/api/v1/courses/\(courseID)/quizzes/\(quizID)",
@@ -309,6 +353,35 @@ final class NetworkManager {
         }
     }
 
+    private func requestFormEncoded<T: Decodable>(
+        path: String,
+        queryItems: [URLQueryItem],
+        formItems: [URLQueryItem],
+        method: String,
+        config: CanvasConfig,
+        responseType: T.Type
+    ) async throws -> T {
+        let url = try makeURL(path: path, queryItems: queryItems, config: config)
+        var bodyComponents = URLComponents()
+        bodyComponents.queryItems = formItems
+        let body = Data((bodyComponents.percentEncodedQuery ?? "").utf8)
+        let request = authorizedRequest(
+            url: url,
+            token: config.trimmedToken,
+            method: method,
+            body: body,
+            contentType: "application/x-www-form-urlencoded"
+        )
+        let (data, response) = try await session.data(for: request)
+        try validate(response: response, data: data)
+
+        do {
+            return try decoder.decode(T.self, from: data)
+        } catch {
+            throw CanvasServiceError.decodingFailed
+        }
+    }
+
     private func requestPaginatedArray<T: Decodable>(
         path: String,
         queryItems: [URLQueryItem],
@@ -365,6 +438,20 @@ final class NetworkManager {
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        return request
+    }
+
+    private func authorizedRequest(
+        url: URL,
+        token: String,
+        method: String,
+        body: Data,
+        contentType: String
+    ) -> URLRequest {
+        var request = authorizedRequest(url: url, token: token)
+        request.httpMethod = method
+        request.httpBody = body
+        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         return request
     }
 
@@ -426,6 +513,23 @@ final class NetworkManager {
         }
 
         return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+    }
+
+    private static func sortConversations(_ lhs: CanvasConversation, _ rhs: CanvasConversation) -> Bool {
+        switch (lhs.lastMessageAt, rhs.lastMessageAt) {
+        case let (left?, right?):
+            if left != right {
+                return left > right
+            }
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        case (.none, .none):
+            break
+        }
+
+        return lhs.displaySubject.localizedCaseInsensitiveCompare(rhs.displaySubject) == .orderedAscending
     }
 
     private static func sortMissingSubmissions(_ lhs: MissingSubmission, _ rhs: MissingSubmission) -> Bool {

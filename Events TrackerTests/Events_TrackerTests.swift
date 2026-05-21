@@ -588,6 +588,40 @@ struct Events_TrackerTests {
         #expect(!teacher.matchesSearch("biology"))
     }
 
+    @Test func canvasConversationBuildsMetadataAndMatchesSearch() async throws {
+        let conversation = CanvasConversation(
+            id: 2,
+            subject: "Lab feedback",
+            workflowState: .unread,
+            lastMessage: "Please review the attached rubric.",
+            lastMessageAt: Date(timeIntervalSince1970: 1_710_000_000),
+            messageCount: 3,
+            subscribed: true,
+            starred: false,
+            audienceContexts: CanvasConversationAudienceContexts(
+                courses: ["42": ["StudentEnrollment"]],
+                groups: [:]
+            ),
+            avatarURL: nil,
+            participants: [
+                CanvasConversationParticipant(id: 1, name: "Jane", fullName: "Jane Teacher", avatarURL: nil),
+                CanvasConversationParticipant(id: 2, name: "Alex", fullName: "Alex Student", avatarURL: nil)
+            ],
+            visible: true,
+            contextName: "Biology"
+        )
+
+        #expect(conversation.isUnread)
+        #expect(!conversation.isArchived)
+        #expect(conversation.courseIDs == [42])
+        #expect(conversation.participantSummary == "Jane Teacher, Alex Student")
+        #expect(conversation.matchesSearch("rubric"))
+        #expect(conversation.matchesSearch("biology"))
+        #expect(conversation.matchesSearch("teacher"))
+        #expect(!conversation.matchesSearch("chemistry"))
+        #expect(conversation.canvasURL(baseURL: "https://canvas.example.edu")?.absoluteString == "https://canvas.example.edu/conversations/2")
+    }
+
     @Test func moduleItemDetailKeysAreStable() async throws {
         #expect(CourseModuleItemDetailKey.quiz(courseID: 42, quizID: 9).rawValue == "quiz:42:9")
         #expect(CourseModuleItemDetailKey.discussion(courseID: 42, discussionID: 8).rawValue == "discussion:42:8")
@@ -755,6 +789,119 @@ struct Events_TrackerTests {
         #expect(people.count == 1)
         #expect(people.first?.primaryRole == .teacher)
         #expect(people.first?.sectionLabel == "Lecture")
+    }
+
+    @Test func networkManagerFetchesConversationsWithCourseFilter() async throws {
+        let session = makeCapturingURLSession { request in
+            guard
+                let url = request.url,
+                let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            else {
+                throw CanvasServiceError.invalidResponse
+            }
+
+            let data = """
+            [
+              {
+                "id": 1,
+                "subject": "Older",
+                "workflow_state": "read",
+                "last_message": "Older note",
+                "last_message_at": "2024-03-01T12:00:00Z",
+                "message_count": 1,
+                "subscribed": true,
+                "starred": false,
+                "audience_contexts": { "courses": { "42": ["StudentEnrollment"] }, "groups": {} },
+                "participants": [
+                  { "id": 10, "name": "Jane", "full_name": "Jane Teacher" }
+                ],
+                "visible": true,
+                "context_name": "Biology"
+              },
+              {
+                "id": 2,
+                "subject": "Newer",
+                "workflow_state": "unread",
+                "last_message": "Newer note",
+                "last_message_at": "2024-03-02T12:00:00Z",
+                "message_count": 2,
+                "subscribed": true,
+                "starred": false,
+                "audience_contexts": { "courses": { "42": ["StudentEnrollment"] }, "groups": {} },
+                "participants": [
+                  { "id": 11, "name": "Dr. Smith", "full_name": "Dr. Smith" }
+                ],
+                "visible": true,
+                "context_name": "Biology"
+              }
+            ]
+            """.data(using: .utf8)!
+
+            return (response, data)
+        }
+        let manager = NetworkManager(session: session)
+
+        let conversations = try await manager.fetchConversations(scope: .unread, filterCourseID: 42, using: makeCanvasConfig())
+        let request = try #require(CapturingURLProtocol.lastRequest)
+        let requestURL = try #require(request.url)
+        let components = try #require(URLComponents(url: requestURL, resolvingAgainstBaseURL: false))
+        let queryItems = components.queryItems ?? []
+
+        #expect(components.path == "/api/v1/conversations")
+        #expect(queryItems.contains(URLQueryItem(name: "scope", value: "unread")))
+        #expect(queryItems.contains(URLQueryItem(name: "filter[]", value: "course_42")))
+        #expect(queryItems.contains(URLQueryItem(name: "include[]", value: "participant_avatars")))
+        #expect(queryItems.contains(URLQueryItem(name: "per_page", value: "100")))
+        #expect(conversations.map(\.id) == [2, 1])
+        #expect(conversations.first?.isUnread == true)
+    }
+
+    @Test func networkManagerUpdatesConversationWorkflowState() async throws {
+        let session = makeCapturingURLSession { request in
+            #expect(request.httpMethod == "PUT")
+            let body = try #require(httpBodyData(from: request))
+            let formItems = formBodyItems(from: body)
+            #expect(formItems["conversation[workflow_state]"] == "read")
+
+            guard
+                let url = request.url,
+                let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            else {
+                throw CanvasServiceError.invalidResponse
+            }
+
+            let data = """
+            {
+              "id": 2,
+              "subject": "Lab feedback",
+              "workflow_state": "read",
+              "last_message": "Thanks",
+              "last_message_at": "2024-03-02T12:00:00Z",
+              "message_count": 2,
+              "subscribed": true,
+              "starred": false,
+              "audience_contexts": { "courses": { "42": ["StudentEnrollment"] }, "groups": {} },
+              "participants": [
+                { "id": 11, "name": "Dr. Smith", "full_name": "Dr. Smith" }
+              ],
+              "visible": true,
+              "context_name": "Biology"
+            }
+            """.data(using: .utf8)!
+
+            return (response, data)
+        }
+        let manager = NetworkManager(session: session)
+
+        let updated = try await manager.updateConversationWorkflowState(
+            conversationID: 2,
+            state: .read,
+            using: makeCanvasConfig()
+        )
+        let requestURL = try #require(CapturingURLProtocol.lastRequest?.url)
+
+        #expect(requestURL.path == "/api/v1/conversations/2")
+        #expect(updated.workflowState == .read)
     }
 
     @Test func networkManagerFetchesQuizDetail() async throws {
@@ -1528,6 +1675,32 @@ struct Events_TrackerTests {
         } catch {
             Issue.record("Expected missing direct download URL, got \(error)")
         }
+    }
+
+    @Test func fileDownloadRecordValidatesLocalPreviewURL() async throws {
+        let localURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "EventsTracker-\(UUID().uuidString)-preview.pdf"
+        )
+        defer { try? FileManager.default.removeItem(at: localURL) }
+
+        let file = makeCanvasFile(id: 30, name: "Preview.pdf")
+        let record = FileDownloadRecord(
+            fileID: file.id,
+            courseID: 1,
+            folderID: nil,
+            file: file,
+            state: .downloaded,
+            localPath: localURL.path,
+            downloadedAt: Date(),
+            failureMessage: nil,
+            byteCount: 7
+        )
+
+        #expect(record.localPreviewURL == nil)
+
+        try Data("preview".utf8).write(to: localURL)
+
+        #expect(record.localPreviewURL == localURL)
     }
 
     @Test func fileDownloadManagerReconcilesInterruptedAndMissingLocalRecords() async throws {
