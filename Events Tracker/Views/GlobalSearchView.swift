@@ -20,11 +20,27 @@ struct GlobalSearchView: View {
         allResults.filter { $0.matchesKind(selectedKind) }
     }
 
+    private var topResults: [GlobalSearchResult] {
+        guard selectedKind == nil else {
+            return []
+        }
+
+        return Array(visibleResults.prefix(5))
+    }
+
     private var groupedResults: [(GlobalSearchResultKind, [GlobalSearchResult])] {
         GlobalSearchResultKind.allCases.compactMap { kind in
             let matches = visibleResults.filter { $0.kind == kind }
             return matches.isEmpty ? nil : (kind, matches)
         }
+    }
+
+    private var resultCountLabel: String {
+        if let selectedKind {
+            return "\(visibleResults.count) \(selectedKind.rawValue.lowercased()) result\(visibleResults.count == 1 ? "" : "s")"
+        }
+
+        return "\(visibleResults.count) results across \(groupedResults.count) sections"
     }
 
     var body: some View {
@@ -50,26 +66,24 @@ struct GlobalSearchView: View {
                     )
                 } else {
                     VStack(alignment: .leading, spacing: 18) {
-                        Text("\(visibleResults.count) results")
+                        Text(resultCountLabel)
                             .font(.headline)
+
+                        if !topResults.isEmpty {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Top Results")
+                                    .font(.headline)
+
+                                resultSection(topResults)
+                            }
+                        }
 
                         ForEach(groupedResults, id: \.0) { kind, results in
                             VStack(alignment: .leading, spacing: 10) {
                                 Label(kind.rawValue, systemImage: kind.systemImage)
                                     .font(.headline)
 
-                                VStack(alignment: .leading, spacing: 0) {
-                                    ForEach(results) { result in
-                                        GlobalSearchResultRow(result: result, onNavigateToCourse: onNavigateToCourse)
-
-                                        if result.id != results.last?.id {
-                                            Divider()
-                                        }
-                                    }
-                                }
-                                .padding(14)
-                                .background(Color.primary.opacity(0.04))
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                resultSection(results)
                             }
                         }
                     }
@@ -106,6 +120,22 @@ struct GlobalSearchView: View {
 
             Spacer()
         }
+    }
+
+    @ViewBuilder
+    private func resultSection(_ results: [GlobalSearchResult]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(results) { result in
+                GlobalSearchResultRow(result: result, onNavigateToCourse: onNavigateToCourse)
+
+                if result.id != results.last?.id {
+                    Divider()
+                }
+            }
+        }
+        .padding(14)
+        .background(Color.primary.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private var recentSearches: some View {
@@ -147,6 +177,23 @@ private struct GlobalSearchResultRow: View {
     let result: GlobalSearchResult
     let onNavigateToCourse: () -> Void
 
+    private var openLabel: String {
+        switch result.kind {
+        case .course:
+            return "Go to Course"
+        case .assignment, .missing, .event:
+            return "Open in Canvas"
+        case .file:
+            return "Open File"
+        default:
+            return "Open"
+        }
+    }
+
+    private var showsUseCourseAction: Bool {
+        result.kind != .course && result.courseID != nil
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: result.kind.systemImage)
@@ -173,7 +220,7 @@ private struct GlobalSearchResultRow: View {
 
             Spacer()
 
-            if let courseID = result.courseID {
+            if showsUseCourseAction, let courseID = result.courseID {
                 Button("Use Course") {
                     store.selectedCourseID = courseID
                     onNavigateToCourse()
@@ -182,7 +229,7 @@ private struct GlobalSearchResultRow: View {
             }
 
             if let url = result.url {
-                Link("Open", destination: url)
+                Link(openLabel, destination: url)
                     .font(.caption.weight(.semibold))
             }
         }

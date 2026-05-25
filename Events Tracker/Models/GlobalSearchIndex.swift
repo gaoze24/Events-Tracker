@@ -25,6 +25,8 @@ struct GlobalSearchIndex {
             return []
         }
 
+        let queryTokens = tokens(from: normalizedQuery)
+        let referenceDate = Date()
         let courseNames = Dictionary(uniqueKeysWithValues: courses.map { ($0.id, $0.name) })
         let courseIDsByFolderID = foldersByCourseID.reduce(into: [Int: Int]()) { partialResult, entry in
             let (courseID, folders) = entry
@@ -44,7 +46,9 @@ struct GlobalSearchIndex {
                 courseName: course.name,
                 url: course.htmlURL,
                 fields: [course.name, course.courseCode, course.enrollmentTerm?.name],
-                query: normalizedQuery
+                query: normalizedQuery,
+                queryTokens: queryTokens,
+                referenceDate: referenceDate
             ))
         }
 
@@ -58,7 +62,11 @@ struct GlobalSearchIndex {
                 courseName: event.courseID.flatMap { courseNames[$0] },
                 url: event.actionableURL,
                 fields: [event.title, event.details, event.kindLabel, event.workflowState],
-                query: normalizedQuery
+                query: normalizedQuery,
+                queryTokens: queryTokens,
+                referenceDate: referenceDate,
+                urgencyDate: event.displayDate,
+                isAssignmentBackedEvent: event.isAssignment
             ))
         }
 
@@ -72,7 +80,11 @@ struct GlobalSearchIndex {
                 courseName: submission.courseID.flatMap { courseNames[$0] },
                 url: submission.htmlURL,
                 fields: [submission.name, "missing", submission.pointsPossible.map { "\($0) points" }],
-                query: normalizedQuery
+                query: normalizedQuery,
+                queryTokens: queryTokens,
+                referenceDate: referenceDate,
+                urgencyDate: submission.dueAt,
+                isOverdue: submission.isOverdue(referenceDate: referenceDate)
             ))
         }
 
@@ -85,7 +97,7 @@ struct GlobalSearchIndex {
                     subtitle: assignment.status.rawValue,
                     courseID: courseID,
                     courseName: courseNames[courseID],
-                    url: assignment.htmlURL,
+                    url: assignment.canvasURL,
                     fields: [
                         assignment.name,
                         courseNames[courseID],
@@ -94,7 +106,11 @@ struct GlobalSearchIndex {
                         assignment.pointsDescription,
                         assignment.gradeDescription
                     ],
-                    query: normalizedQuery
+                    query: normalizedQuery,
+                    queryTokens: queryTokens,
+                    referenceDate: referenceDate,
+                    urgencyDate: assignment.dueAt,
+                    isOverdue: assignment.status == .missing || assignment.status == .late
                 ))
             }
         }
@@ -110,7 +126,9 @@ struct GlobalSearchIndex {
                     courseName: courseNames[courseID],
                     url: nil,
                     fields: [module.name, module.workflowState],
-                    query: normalizedQuery
+                    query: normalizedQuery,
+                    queryTokens: queryTokens,
+                    referenceDate: referenceDate
                 ))
 
                 for item in module.sortedItems {
@@ -123,7 +141,9 @@ struct GlobalSearchIndex {
                         courseName: courseNames[courseID],
                         url: item.actionableURL,
                         fields: [item.title, item.itemTypeLabel, item.pageURL, item.pointsDescription],
-                        query: normalizedQuery
+                        query: normalizedQuery,
+                        queryTokens: queryTokens,
+                        referenceDate: referenceDate
                     ))
                 }
             }
@@ -140,7 +160,9 @@ struct GlobalSearchIndex {
                     courseName: courseNames[courseID],
                     url: nil,
                     fields: [folder.displayName, folder.fullName, folder.itemCountDescription],
-                    query: normalizedQuery
+                    query: normalizedQuery,
+                    queryTokens: queryTokens,
+                    referenceDate: referenceDate
                 ))
             }
         }
@@ -157,7 +179,9 @@ struct GlobalSearchIndex {
                     courseName: courseID.flatMap { courseNames[$0] },
                     url: file.actionableURL,
                     fields: [file.name, file.filename, file.contentType, file.sizeDescription],
-                    query: normalizedQuery
+                    query: normalizedQuery,
+                    queryTokens: queryTokens,
+                    referenceDate: referenceDate
                 ))
             }
         }
@@ -173,7 +197,10 @@ struct GlobalSearchIndex {
                     courseName: courseNames[courseID],
                     url: announcement.htmlURL,
                     fields: [announcement.title, announcement.summaryText, announcement.readState],
-                    query: normalizedQuery
+                    query: normalizedQuery,
+                    queryTokens: queryTokens,
+                    referenceDate: referenceDate,
+                    isUnread: announcement.isUnread
                 ))
             }
         }
@@ -188,7 +215,9 @@ struct GlobalSearchIndex {
                 courseName: courseNames[courseID],
                 url: syllabus.htmlURL,
                 fields: [syllabus.name, syllabus.summaryText],
-                query: normalizedQuery
+                query: normalizedQuery,
+                queryTokens: queryTokens,
+                referenceDate: referenceDate
             ))
         }
 
@@ -203,7 +232,9 @@ struct GlobalSearchIndex {
                     courseName: courseNames[courseID],
                     url: person.htmlURL,
                     fields: [person.displayName, person.name, person.roleLabel, person.email, person.sectionLabel],
-                    query: normalizedQuery
+                    query: normalizedQuery,
+                    queryTokens: queryTokens,
+                    referenceDate: referenceDate
                 ))
             }
         }
@@ -220,7 +251,9 @@ struct GlobalSearchIndex {
                 courseName: courseID.flatMap { courseNames[$0] },
                 url: detail.htmlURL,
                 fields: fields,
-                query: normalizedQuery
+                query: normalizedQuery,
+                queryTokens: queryTokens,
+                referenceDate: referenceDate
             ))
         }
 
@@ -231,8 +264,8 @@ struct GlobalSearchIndex {
                     return $0.score > $1.score
                 }
 
-                if $0.kind.rawValue != $1.kind.rawValue {
-                    return $0.kind.rawValue < $1.kind.rawValue
+                if ($0.url != nil) != ($1.url != nil) {
+                    return $0.url != nil
                 }
 
                 return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
@@ -248,10 +281,30 @@ struct GlobalSearchIndex {
         courseName: String?,
         url: URL?,
         fields: [String?],
-        query: String
+        query: String,
+        queryTokens: [String],
+        referenceDate: Date,
+        urgencyDate: Date? = nil,
+        isOverdue: Bool = false,
+        isUnread: Bool = false,
+        isAssignmentBackedEvent: Bool = false
     ) -> GlobalSearchResult {
         let searchableText = fields.compactMap { $0 }.joined(separator: " ")
-        let score = score(title: title, fields: fields, query: query)
+        let score = score(
+            kind: kind,
+            title: title,
+            subtitle: subtitle,
+            courseName: courseName,
+            fields: fields,
+            query: query,
+            queryTokens: queryTokens,
+            urgencyDate: urgencyDate,
+            referenceDate: referenceDate,
+            isOverdue: isOverdue,
+            isUnread: isUnread,
+            isAssignmentBackedEvent: isAssignmentBackedEvent,
+            isActionable: url != nil
+        )
         return GlobalSearchResult(
             id: id,
             kind: kind,
@@ -265,23 +318,166 @@ struct GlobalSearchIndex {
         )
     }
 
-    private static func score(title: String, fields: [String?], query: String) -> Int {
+    private static func score(
+        kind: GlobalSearchResultKind,
+        title: String,
+        subtitle: String?,
+        courseName: String?,
+        fields: [String?],
+        query: String,
+        queryTokens: [String],
+        urgencyDate: Date?,
+        referenceDate: Date,
+        isOverdue: Bool,
+        isUnread: Bool,
+        isAssignmentBackedEvent: Bool,
+        isActionable: Bool
+    ) -> Int {
         let normalizedTitle = normalize(title)
+        let normalizedSubtitle = normalize(subtitle ?? "")
+        let normalizedCourseName = normalize(courseName ?? "")
+        let metadata = normalize(fields.compactMap { $0 }.joined(separator: " "))
+        let titleTokens = tokens(from: normalizedTitle)
+
+        var score = 0
 
         if normalizedTitle == query {
-            return 100
+            score += 160
+        } else if normalizedTitle.hasPrefix(query) {
+            score += 120
+        } else if titleTokens.contains(where: { $0.hasPrefix(query) }) {
+            score += 96
+        } else if normalizedTitle.contains(query) {
+            score += 80
         }
 
-        if normalizedTitle.hasPrefix(query) {
-            return 80
+        if !normalizedSubtitle.isEmpty {
+            if normalizedSubtitle == query {
+                score += 48
+            } else if normalizedSubtitle.hasPrefix(query) {
+                score += 34
+            } else if normalizedSubtitle.contains(query) {
+                score += 22
+            }
         }
 
-        if normalizedTitle.contains(query) {
-            return 60
+        if !normalizedCourseName.isEmpty {
+            if normalizedCourseName == query {
+                score += 44
+            } else if normalizedCourseName.hasPrefix(query) {
+                score += 28
+            } else if normalizedCourseName.contains(query) {
+                score += 18
+            }
         }
 
-        let metadata = normalize(fields.compactMap { $0 }.joined(separator: " "))
-        return metadata.contains(query) ? 30 : 0
+        let metadataTokens = tokens(from: metadata)
+        for token in queryTokens where !token.isEmpty {
+            if metadataTokens.contains(where: { $0.hasPrefix(token) }) {
+                score += 12
+            } else if metadata.contains(token) {
+                score += 8
+            }
+        }
+
+        if score == 0 && metadata.contains(query) {
+            score += 20
+        }
+
+        if score == 0 {
+            return 0
+        }
+
+        score += kindBonus(kind)
+
+        if isActionable {
+            score += 6
+        }
+
+        if isAssignmentBackedEvent {
+            score += 10
+        }
+
+        if isUnread {
+            score += 6
+        }
+
+        if isOverdue {
+            score += 26
+        }
+
+        score += urgencyBonus(for: urgencyDate, referenceDate: referenceDate, kind: kind)
+        return score
+    }
+
+    private static func kindBonus(_ kind: GlobalSearchResultKind) -> Int {
+        switch kind {
+        case .missing:
+            return 26
+        case .assignment:
+            return 20
+        case .event:
+            return 18
+        case .detail:
+            return 14
+        case .file:
+            return 12
+        case .announcement:
+            return 10
+        case .person:
+            return 8
+        case .course:
+            return 8
+        case .moduleItem:
+            return 4
+        case .syllabus:
+            return 4
+        case .module:
+            return 2
+        case .folder:
+            return 0
+        }
+    }
+
+    private static func urgencyBonus(for date: Date?, referenceDate: Date, kind: GlobalSearchResultKind) -> Int {
+        guard let date else {
+            return 0
+        }
+
+        let delta = date.timeIntervalSince(referenceDate)
+        let day: TimeInterval = 24 * 60 * 60
+
+        if delta < 0 {
+            switch kind {
+            case .missing, .assignment:
+                return 18
+            case .event:
+                return 4
+            default:
+                return 0
+            }
+        }
+
+        if delta <= day {
+            return 16
+        }
+
+        if delta <= 3 * day {
+            return 10
+        }
+
+        if delta <= 7 * day {
+            return 6
+        }
+
+        return 0
+    }
+
+    private static func tokens(from value: String) -> [String] {
+        normalize(value)
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+            .filter { !$0.isEmpty }
     }
 
     private static func normalize(_ value: String) -> String {

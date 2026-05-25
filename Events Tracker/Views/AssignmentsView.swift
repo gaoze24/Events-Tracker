@@ -252,15 +252,17 @@ private struct AssignmentRow: View {
 
             Spacer()
 
-            if let url = assignment.htmlURL {
-                Link(destination: url) {
-                    Image(systemName: "arrow.up.right.square")
-                        .foregroundStyle(Color.secondary.opacity(0.5))
-                        .font(.caption)
-                }
-            }
+            AssignmentRowActions(assignment: assignment)
         }
         .padding(.vertical, 9)
+    }
+}
+
+private struct AssignmentRowActions: View {
+    let assignment: CourseAssignment
+
+    var body: some View {
+        AssignmentCompactActions(assignment: assignment)
     }
 }
 

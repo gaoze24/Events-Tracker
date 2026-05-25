@@ -18,29 +18,32 @@ struct HomeView: View {
         )
     }
 
-    private var filteredMissingSubmissions: [MissingSubmission] {
-        store.filteredMissingSubmissions(courseID: selectedCourseID)
-            .sorted(by: sortMissingSubmissions)
+    private var prioritizedMissingSubmissions: [MissingSubmission] {
+        store.prioritizedMissingSubmissions(courseID: selectedCourseID)
     }
 
-    private var filteredUpcomingEvents: [UpcomingEvent] {
-        store.filteredUpcomingEvents(courseID: selectedCourseID)
+    private var prioritizedUpcomingEvents: [UpcomingEvent] {
+        store.prioritizedUpcomingEvents(courseID: selectedCourseID)
+    }
+
+    private var priorityNowItems: [CanvasStore.DashboardPriorityItem] {
+        store.priorityNowItems(courseID: selectedCourseID)
+    }
+
+    private var focusItem: CanvasStore.DashboardPriorityItem? {
+        store.dashboardFocusItem(courseID: selectedCourseID)
     }
 
     private var todayEvents: [UpcomingEvent] {
-        filteredUpcomingEvents.filter { $0.dashboardWindow() == .today }
+        prioritizedUpcomingEvents.filter { $0.dashboardWindow() == .today }
     }
 
     private var thisWeekEvents: [UpcomingEvent] {
-        filteredUpcomingEvents.filter { $0.dashboardWindow() == .thisWeek }
+        prioritizedUpcomingEvents.filter { $0.dashboardWindow() == .thisWeek }
     }
 
     private var laterEvents: [UpcomingEvent] {
-        filteredUpcomingEvents.filter { $0.dashboardWindow() == .later }
-    }
-
-    private var nextUpcomingEvent: UpcomingEvent? {
-        (todayEvents + thisWeekEvents + laterEvents).first
+        prioritizedUpcomingEvents.filter { $0.dashboardWindow() == .later }
     }
 
     private var selectedCourseName: String {
@@ -60,8 +63,7 @@ struct HomeView: View {
                     metrics
 
                     HomeFocusCard(
-                        missingSubmission: filteredMissingSubmissions.first,
-                        upcomingEvent: nextUpcomingEvent,
+                        item: focusItem,
                         courseName: { store.courseName(for: $0) }
                     )
 
@@ -118,10 +120,10 @@ struct HomeView: View {
 
             HomeMetricCard(
                 title: "Overdue",
-                value: "\(filteredMissingSubmissions.count)",
-                detail: filteredMissingSubmissions.isEmpty ? "No missing work" : "Needs attention",
+                value: "\(prioritizedMissingSubmissions.count)",
+                detail: prioritizedMissingSubmissions.isEmpty ? "No missing work" : "Needs attention",
                 systemImage: "exclamationmark.circle",
-                tint: filteredMissingSubmissions.isEmpty ? .secondary : .red
+                tint: prioritizedMissingSubmissions.isEmpty ? .secondary : .red
             )
 
             HomeMetricCard(
@@ -144,7 +146,7 @@ struct HomeView: View {
 
     @ViewBuilder
     private var prioritySections: some View {
-        if filteredMissingSubmissions.isEmpty && todayEvents.isEmpty && thisWeekEvents.isEmpty && laterEvents.isEmpty {
+        if prioritizedMissingSubmissions.isEmpty && todayEvents.isEmpty && thisWeekEvents.isEmpty && laterEvents.isEmpty {
             ContentUnavailableView(
                 "All Clear",
                 systemImage: "checkmark.circle",
@@ -153,18 +155,36 @@ struct HomeView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 36)
         } else {
-            if !filteredMissingSubmissions.isEmpty {
+            if !priorityNowItems.isEmpty {
+                HomeSection(
+                    title: "Priority Now",
+                    subtitle: "\(priorityNowItems.count) item\(priorityNowItems.count == 1 ? "" : "s") worth handling first",
+                    accentColor: .blue
+                ) {
+                    ForEach(priorityNowItems) { item in
+                        HomePriorityRow(
+                            item: item,
+                            courseName: store.courseName(for: item.courseID)
+                        )
+                        if item.id != priorityNowItems.last?.id {
+                            Divider().padding(.leading, 32)
+                        }
+                    }
+                }
+            }
+
+            if !prioritizedMissingSubmissions.isEmpty {
                 HomeSection(
                     title: "Overdue",
-                    subtitle: "\(filteredMissingSubmissions.count) item\(filteredMissingSubmissions.count == 1 ? "" : "s") need attention",
+                    subtitle: "\(prioritizedMissingSubmissions.count) item\(prioritizedMissingSubmissions.count == 1 ? "" : "s") need attention",
                     accentColor: .red
                 ) {
-                    ForEach(Array(filteredMissingSubmissions.prefix(6))) { submission in
+                    ForEach(Array(prioritizedMissingSubmissions.prefix(6))) { submission in
                         HomeMissingRow(
                             submission: submission,
                             courseName: store.courseName(for: submission.courseID)
                         )
-                        if submission.id != filteredMissingSubmissions.prefix(6).last?.id {
+                        if submission.id != prioritizedMissingSubmissions.prefix(6).last?.id {
                             Divider().padding(.leading, 32)
                         }
                     }
@@ -227,22 +247,6 @@ struct HomeView: View {
         }
     }
 
-    private func sortMissingSubmissions(_ lhs: MissingSubmission, _ rhs: MissingSubmission) -> Bool {
-        switch (lhs.dueAt, rhs.dueAt) {
-        case let (left?, right?):
-            if left != right {
-                return left < right
-            }
-        case (.some, .none):
-            return true
-        case (.none, .some):
-            return false
-        case (.none, .none):
-            break
-        }
-
-        return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-    }
 }
 
 private struct HomeMetricCard: View {
@@ -278,8 +282,7 @@ private struct HomeMetricCard: View {
 }
 
 private struct HomeFocusCard: View {
-    let missingSubmission: MissingSubmission?
-    let upcomingEvent: UpcomingEvent?
+    let item: CanvasStore.DashboardPriorityItem?
     let courseName: (Int?) -> String?
 
     var body: some View {
@@ -300,7 +303,7 @@ private struct HomeFocusCard: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
-            if let url = focusURL {
+            if let url = item?.actionableURL {
                 Link("Open in Canvas", destination: url)
                     .font(.caption.weight(.semibold))
             }
@@ -312,43 +315,90 @@ private struct HomeFocusCard: View {
     }
 
     private var focusIcon: String {
-        missingSubmission == nil ? "sparkles" : "exclamationmark.triangle"
+        item?.isMissing == true ? "exclamationmark.triangle" : "sparkles"
     }
 
     private var focusTint: Color {
-        missingSubmission == nil ? .blue : .red
+        item?.isMissing == true ? .red : .blue
     }
 
     private var focusBadge: String {
-        if missingSubmission != nil {
-            return "Overdue"
+        guard let item else {
+            return "Clear"
         }
 
-        return upcomingEvent == nil ? "Clear" : "Next Up"
+        return item.isMissing ? "Overdue" : "Next Up"
     }
 
     private var focusTitle: String {
-        missingSubmission?.name ?? upcomingEvent?.title ?? "No urgent work right now"
+        item?.title ?? "No urgent work right now"
     }
 
     private var focusDetail: String {
-        if let missingSubmission {
-            let course = courseName(missingSubmission.courseID) ?? "Canvas"
-            let due = DisplayFormatters.relativeString(date: missingSubmission.dueAt) ?? DisplayFormatters.formatted(date: missingSubmission.dueAt)
-            return "\(course) · \(due)"
+        guard let item else {
+            return "You are caught up for the current course filter."
         }
 
-        if let upcomingEvent {
-            let course = courseName(upcomingEvent.courseID) ?? "Canvas"
-            let due = DisplayFormatters.relativeString(date: upcomingEvent.displayDate) ?? DisplayFormatters.formatted(date: upcomingEvent.displayDate)
-            return "\(course) · \(due)"
-        }
+        let course = courseName(item.courseID) ?? "Canvas"
+        let when = DisplayFormatters.relativeString(date: item.date) ?? DisplayFormatters.formatted(date: item.date)
+        return "\(course) · \(when)"
+    }
+}
 
-        return "You are caught up for the current course filter."
+private struct HomePriorityRow: View {
+    let item: CanvasStore.DashboardPriorityItem
+    let courseName: String?
+
+    private var tint: Color {
+        item.isMissing ? .red : (item.isAssignmentBackedEvent ? .orange : .blue)
     }
 
-    private var focusURL: URL? {
-        missingSubmission?.htmlURL ?? upcomingEvent?.actionableURL
+    private var badgeTint: Color {
+        item.isMissing ? .red : (item.isAssignmentBackedEvent ? .blue : .green)
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Circle()
+                .strokeBorder(tint, lineWidth: 1.5)
+                .frame(width: 16, height: 16)
+                .padding(.top, 3)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.title)
+                    .font(.body)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(spacing: 4) {
+                    if let courseName {
+                        Text(courseName)
+                            .foregroundStyle(Color.secondary)
+                    }
+                    if let date = item.date,
+                       let relative = DisplayFormatters.relativeString(date: date) {
+                        if courseName != nil {
+                            Text("·").foregroundStyle(Color(white: 0.6))
+                        }
+                        Text(relative)
+                            .foregroundStyle(tint)
+                    }
+                }
+                .font(.caption)
+            }
+
+            Spacer()
+
+            PillBadge(text: item.subtitle, tint: badgeTint)
+
+            if let url = item.actionableURL {
+                Link(destination: url) {
+                    Image(systemName: "arrow.up.right.square")
+                        .foregroundStyle(Color.secondary.opacity(0.5))
+                        .font(.caption)
+                }
+            }
+        }
+        .padding(.vertical, 9)
     }
 }
 

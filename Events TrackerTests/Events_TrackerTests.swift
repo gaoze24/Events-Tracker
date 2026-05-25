@@ -496,6 +496,85 @@ struct Events_TrackerTests {
         #expect(moduleItem.pointsDescription == "25 pts")
     }
 
+    @Test func assignmentQuickActionURLsAndLabelsPreferSubmissionFlow() async throws {
+        let assignment = CourseAssignment(
+            id: 42,
+            name: "Lab Report",
+            details: nil,
+            dueAt: nil,
+            unlockAt: nil,
+            lockAt: nil,
+            htmlURL: URL(string: "https://canvas.example.edu/courses/7/assignments/42"),
+            courseID: 7,
+            pointsPossible: 100,
+            submissionTypes: ["online_upload"],
+            hasSubmittedSubmissions: false,
+            published: true,
+            gradingType: "points",
+            submission: nil
+        )
+
+        #expect(assignment.canvasURL?.absoluteString == "https://canvas.example.edu/courses/7/assignments/42")
+        #expect(assignment.submissionURL?.absoluteString == "https://canvas.example.edu/courses/7/assignments/42/submissions")
+        #expect(assignment.showsSubmissionAction)
+        #expect(assignment.submissionActionTitle == "Open Submission")
+    }
+
+    @Test func assignmentQuickActionUsesViewLabelForExistingSubmission() async throws {
+        let assignment = CourseAssignment(
+            id: 42,
+            name: "Lab Report",
+            details: nil,
+            dueAt: nil,
+            unlockAt: nil,
+            lockAt: nil,
+            htmlURL: URL(string: "https://canvas.example.edu/courses/7/assignments/42"),
+            courseID: 7,
+            pointsPossible: 100,
+            submissionTypes: ["online_upload"],
+            hasSubmittedSubmissions: true,
+            published: true,
+            gradingType: "points",
+            submission: AssignmentSubmission(
+                submittedAt: Date(timeIntervalSince1970: 1_710_000_000),
+                gradedAt: nil,
+                score: nil,
+                grade: nil,
+                workflowState: "submitted",
+                late: false,
+                missing: false,
+                excused: false,
+                submissionType: "online_upload",
+                attempt: 1
+            )
+        )
+
+        #expect(assignment.showsSubmissionAction)
+        #expect(assignment.submissionActionTitle == "View Submission")
+    }
+
+    @Test func assignmentQuickActionHidesSubmissionForOnPaperOnlyAssignments() async throws {
+        let assignment = CourseAssignment(
+            id: 42,
+            name: "Lab Report",
+            details: nil,
+            dueAt: nil,
+            unlockAt: nil,
+            lockAt: nil,
+            htmlURL: URL(string: "https://canvas.example.edu/courses/7/assignments/42"),
+            courseID: 7,
+            pointsPossible: 100,
+            submissionTypes: ["on_paper"],
+            hasSubmittedSubmissions: false,
+            published: true,
+            gradingType: "points",
+            submission: nil
+        )
+
+        #expect(!assignment.showsSubmissionAction)
+        #expect(assignment.submissionURL?.absoluteString == "https://canvas.example.edu/courses/7/assignments/42/submissions")
+    }
+
     @Test func courseAnnouncementBuildsSummaryAndSearchMetadata() async throws {
         let postedAt = Date(timeIntervalSince1970: 1_710_000_000)
         let announcement = CourseAnnouncement(
@@ -2694,6 +2773,167 @@ struct Events_TrackerTests {
         #expect(results.contains { $0.title == "Weekly Notes" })
     }
 
+    @Test func globalSearchRanksCourseNameMatchesAboveMetadataOnlyMatches() async throws {
+        let course = Course(
+            id: 10,
+            name: "Biology 101",
+            courseCode: "BIO-101",
+            workflowState: "available",
+            htmlURL: nil,
+            enrollmentTerm: nil,
+            enrollments: nil
+        )
+        let results = GlobalSearchIndex.results(
+            query: "bio",
+            courses: [course],
+            upcomingEvents: [],
+            missingSubmissions: [],
+            assignmentsByCourseID: [
+                10: [
+                    makeCourseAssignment(id: 1, name: "Cell Lab", dueAt: nil, courseID: 10),
+                    makeCourseAssignment(id: 2, name: "Weekly Notes", dueAt: nil, courseID: 10)
+                ]
+            ],
+            modulesByCourseID: [:],
+            foldersByCourseID: [:],
+            filesByFolderID: [:],
+            announcementsByCourseID: [:],
+            syllabusByCourseID: [:],
+            peopleByCourseID: [:],
+            moduleItemDetailsByKey: [:]
+        )
+
+        #expect(results.first?.kind == .course)
+        #expect(results.first?.title == "Biology 101")
+        let assignment = try #require(results.first { $0.kind == .assignment })
+        #expect(assignment.title == "Cell Lab")
+    }
+
+    @Test func globalSearchBoostsUrgentMissingWorkAboveComparableUpcomingEvents() async throws {
+        let now = Date()
+        let missing = MissingSubmission(
+            id: 1,
+            name: "Essay",
+            dueAt: now.addingTimeInterval(-2 * 60 * 60),
+            courseID: 10,
+            htmlURL: URL(string: "https://canvas.example.edu/courses/10/assignments/1"),
+            pointsPossible: 20
+        )
+        let event = UpcomingEvent(
+            id: "2",
+            title: "Essay Review",
+            details: nil,
+            startAt: now.addingTimeInterval(4 * 60 * 60),
+            endAt: now.addingTimeInterval(4 * 60 * 60),
+            allDay: false,
+            contextCode: "course_10",
+            htmlURL: URL(string: "https://canvas.example.edu/calendar_events/2"),
+            workflowState: "active",
+            assignment: nil
+        )
+
+        let results = GlobalSearchIndex.results(
+            query: "essay",
+            courses: [],
+            upcomingEvents: [event],
+            missingSubmissions: [missing],
+            assignmentsByCourseID: [:],
+            modulesByCourseID: [:],
+            foldersByCourseID: [:],
+            filesByFolderID: [:],
+            announcementsByCourseID: [:],
+            syllabusByCourseID: [:],
+            peopleByCourseID: [:],
+            moduleItemDetailsByKey: [:]
+        )
+
+        #expect(results.first?.kind == .missing)
+        #expect(results.first?.title == "Essay")
+    }
+
+    @MainActor
+    @Test func canvasStorePriorityNowPrefersMissingWorkOverPinnedUpcomingEvents() async throws {
+        let dueSoon = Date(timeIntervalSince1970: 1_710_000_000 + 2 * 60 * 60)
+        let pinnedCourse = makeCourse(id: 2, name: "Pinned Course")
+        let regularCourse = makeCourse(id: 1, name: "Regular Course")
+        let missing = MissingSubmission(
+            id: 10,
+            name: "Problem Set",
+            dueAt: dueSoon.addingTimeInterval(-3 * 60 * 60),
+            courseID: regularCourse.id,
+            htmlURL: URL(string: "https://canvas.example.edu/courses/1/assignments/10"),
+            pointsPossible: 10
+        )
+        let pinnedEvent = UpcomingEvent(
+            id: "event-1",
+            title: "Pinned Quiz",
+            details: nil,
+            startAt: dueSoon,
+            endAt: dueSoon,
+            allDay: false,
+            contextCode: "course_2",
+            htmlURL: URL(string: "https://canvas.example.edu/calendar_events/1"),
+            workflowState: "active",
+            assignment: CanvasAssignment(
+                id: 3,
+                name: "Pinned Quiz",
+                dueAt: dueSoon,
+                courseID: pinnedCourse.id,
+                htmlURL: URL(string: "https://canvas.example.edu/courses/2/assignments/3"),
+                pointsPossible: nil
+            )
+        )
+
+        let harness = try makeCanvasStoreHarness(
+            courses: [regularCourse, pinnedCourse],
+            foldersByCourseID: [:],
+            filesByFolderID: [:],
+            upcomingEvents: [pinnedEvent],
+            missingSubmissions: [missing],
+            coursePreferences: CoursePreferencesSnapshot(pinnedCourseIDs: [pinnedCourse.id])
+        )
+        defer { harness.cleanup() }
+
+        let items = harness.store.priorityNowItems(courseID: nil)
+        #expect(items.first?.title == "Problem Set")
+        #expect(harness.store.dashboardFocusItem(courseID: nil)?.title == "Problem Set")
+    }
+
+    @MainActor
+    @Test func canvasStorePriorityNowUsesPinnedBonusWithinComparableMissingWork() async throws {
+        let dueAt = Date(timeIntervalSince1970: 1_710_000_000)
+        let courseA = makeCourse(id: 1, name: "Course A")
+        let courseB = makeCourse(id: 2, name: "Course B")
+        let missingA = MissingSubmission(
+            id: 1,
+            name: "Lab A",
+            dueAt: dueAt,
+            courseID: courseA.id,
+            htmlURL: nil,
+            pointsPossible: nil
+        )
+        let missingB = MissingSubmission(
+            id: 2,
+            name: "Lab B",
+            dueAt: dueAt,
+            courseID: courseB.id,
+            htmlURL: nil,
+            pointsPossible: nil
+        )
+
+        let harness = try makeCanvasStoreHarness(
+            courses: [courseA, courseB],
+            foldersByCourseID: [:],
+            filesByFolderID: [:],
+            missingSubmissions: [missingA, missingB],
+            coursePreferences: CoursePreferencesSnapshot(pinnedCourseIDs: [courseB.id])
+        )
+        defer { harness.cleanup() }
+
+        let prioritized = harness.store.prioritizedMissingSubmissions(courseID: nil)
+        #expect(prioritized.first?.id == missingB.id)
+    }
+
     @Test func recentSearchManagerSavesCapsAndClearsTerms() async throws {
         let storageURL = makeRecentSearchTempURL()
         let fileManager = FileManager.default
@@ -2853,6 +3093,9 @@ struct Events_TrackerTests {
         courses: [Course],
         foldersByCourseID: [Int: [CanvasFolder]],
         filesByFolderID: [Int: [CanvasFile]],
+        upcomingEvents: [UpcomingEvent] = [],
+        missingSubmissions: [MissingSubmission] = [],
+        coursePreferences: CoursePreferencesSnapshot = CoursePreferencesSnapshot(),
         fileDownloadSnapshot: FileDownloadSnapshot = FileDownloadSnapshot(),
         config: CanvasConfig = CanvasConfig(
             baseURL: "https://canvas.example.edu",
@@ -2864,9 +3107,12 @@ struct Events_TrackerTests {
         let configURL = makeCanvasConfigTempURL()
         let dashboardCacheURL = makeDashboardCacheTempURL()
         let courseDetailCacheURL = makeCourseDetailCacheTempURL()
+        let preferencesURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "EventsTracker-\(UUID().uuidString)-course-preferences.json"
+        )
         let fileMetadataURL = makeFileDownloadMetadataTempURL()
         let downloadsURL = makeDownloadsTempDirectoryURL()
-        let urls = [configURL, dashboardCacheURL, courseDetailCacheURL, fileMetadataURL, downloadsURL]
+        let urls = [configURL, dashboardCacheURL, courseDetailCacheURL, preferencesURL, fileMetadataURL, downloadsURL]
         urls.forEach { try? FileManager.default.removeItem(at: $0) }
 
         let configManager = CanvasConfigManager(configURL: configURL, tokenStore: InMemoryCanvasTokenStore())
@@ -2875,8 +3121,8 @@ struct Events_TrackerTests {
         let databaseManager = DatabaseManager(cacheURL: dashboardCacheURL)
         try databaseManager.saveSnapshot(CanvasSnapshot(
             courses: courses,
-            upcomingEvents: [],
-            missingSubmissions: [],
+            upcomingEvents: upcomingEvents,
+            missingSubmissions: missingSubmissions,
             profile: nil,
             syncedAt: Date()
         ))
@@ -2901,11 +3147,15 @@ struct Events_TrackerTests {
         )
         try fileDownloadManager.saveSnapshot(fileDownloadSnapshot)
 
+        let preferenceManager = CoursePreferenceManager(preferencesURL: preferencesURL)
+        try preferenceManager.savePreferences(coursePreferences)
+
         let store = CanvasStore(
             configManager: configManager,
             databaseManager: databaseManager,
             networkManager: .shared,
             detailCacheManager: detailCacheManager,
+            preferenceManager: preferenceManager,
             fileDownloadManager: fileDownloadManager
         )
 

@@ -470,13 +470,55 @@ struct CourseAssignmentRow: View {
 
                 Spacer()
 
-                if let url = assignment.htmlURL {
-                    Link("Open in Canvas", destination: url)
-                        .font(.caption.weight(.semibold))
-                }
+                AssignmentExternalActions(assignment: assignment)
             }
         }
         .padding(.vertical, 8)
+    }
+}
+
+struct AssignmentExternalActions: View {
+    let assignment: CourseAssignment
+    var font: Font = .caption.weight(.semibold)
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if assignment.showsSubmissionAction, let submissionURL = assignment.submissionURL {
+                Link(assignment.submissionActionTitle, destination: submissionURL)
+                    .font(font)
+            }
+
+            if let canvasURL = assignment.canvasURL {
+                Link("Open in Canvas", destination: canvasURL)
+                    .font(font)
+            }
+        }
+    }
+}
+
+struct AssignmentCompactActions: View {
+    let assignment: CourseAssignment
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if assignment.showsSubmissionAction, let submissionURL = assignment.submissionURL {
+                Link(destination: submissionURL) {
+                    Image(systemName: assignment.submissionActionTitle == "View Submission" ? "doc.text.magnifyingglass" : "paperplane")
+                        .foregroundStyle(Color.accentColor)
+                        .font(.caption)
+                }
+                .help(assignment.submissionActionTitle)
+            }
+
+            if let canvasURL = assignment.canvasURL {
+                Link(destination: canvasURL) {
+                    Image(systemName: "arrow.up.right.square")
+                        .foregroundStyle(Color.secondary.opacity(0.5))
+                        .font(.caption)
+                }
+                .help("Open in Canvas")
+            }
+        }
     }
 }
 
@@ -520,6 +562,9 @@ struct AssignmentDetailView: View {
                     AssignmentDetailInfoRow(title: "Graded", value: DisplayFormatters.relativeString(date: assignment.submission?.gradedAt) ?? DisplayFormatters.formatted(date: assignment.submission?.gradedAt))
                     AssignmentDetailInfoRow(title: "Type", value: assignment.submission?.submissionType ?? assignment.submissionTypes?.joined(separator: ", ") ?? "Not specified")
                     AssignmentDetailInfoRow(title: "Attempt", value: assignment.submission?.attempt.map(String.init) ?? "No attempt recorded")
+
+                    AssignmentExternalActions(assignment: assignment, font: .headline)
+                        .padding(.top, 4)
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
@@ -539,11 +584,6 @@ struct AssignmentDetailView: View {
                         .foregroundStyle(assignment.summaryText == nil ? .secondary : .primary)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                if let htmlURL = assignment.htmlURL {
-                    Link("Open in Canvas", destination: htmlURL)
-                        .font(.headline)
                 }
             }
             .padding(24)

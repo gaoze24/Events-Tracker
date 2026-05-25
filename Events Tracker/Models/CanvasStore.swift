@@ -11,6 +11,91 @@ import Foundation
 
 @MainActor
 final class CanvasStore: ObservableObject {
+    enum BootstrapMode {
+        case normal
+        case uiTests
+    }
+
+    struct DashboardPriorityItem: Identifiable, Hashable {
+        enum Kind: Hashable {
+            case missing(MissingSubmission)
+            case upcoming(UpcomingEvent)
+        }
+
+        let kind: Kind
+        let score: Int
+
+        var id: String {
+            switch kind {
+            case .missing(let submission):
+                return "missing-\(submission.id)"
+            case .upcoming(let event):
+                return "event-\(event.id)"
+            }
+        }
+
+        var title: String {
+            switch kind {
+            case .missing(let submission):
+                return submission.name
+            case .upcoming(let event):
+                return event.title
+            }
+        }
+
+        var subtitle: String {
+            switch kind {
+            case .missing:
+                return "Missing Work"
+            case .upcoming(let event):
+                return event.kindLabel
+            }
+        }
+
+        var courseID: Int? {
+            switch kind {
+            case .missing(let submission):
+                return submission.courseID
+            case .upcoming(let event):
+                return event.courseID
+            }
+        }
+
+        var date: Date? {
+            switch kind {
+            case .missing(let submission):
+                return submission.dueAt
+            case .upcoming(let event):
+                return event.displayDate
+            }
+        }
+
+        var actionableURL: URL? {
+            switch kind {
+            case .missing(let submission):
+                return submission.htmlURL
+            case .upcoming(let event):
+                return event.actionableURL
+            }
+        }
+
+        var isMissing: Bool {
+            if case .missing = kind {
+                return true
+            }
+
+            return false
+        }
+
+        var isAssignmentBackedEvent: Bool {
+            if case .upcoming(let event) = kind {
+                return event.isAssignment
+            }
+
+            return false
+        }
+    }
+
     @Published var config: CanvasConfig
     @Published private(set) var courses: [Course]
     @Published private(set) var courseAssignmentsByCourseID: [Int: [CourseAssignment]]
@@ -69,7 +154,8 @@ final class CanvasStore: ObservableObject {
         fileDownloadManager: FileDownloadManager = .shared,
         recentSearchManager: RecentSearchManager = .shared,
         cachePolicy: CanvasCachePolicy = .default,
-        now: @escaping () -> Date = Date.init
+        now: @escaping () -> Date = Date.init,
+        bootstrapMode: BootstrapMode = .normal
     ) {
         self.configManager = configManager
         self.databaseManager = databaseManager
@@ -82,14 +168,24 @@ final class CanvasStore: ObservableObject {
         self.now = now
         courseDetailAccessDates = [:]
 
-        let savedConfig = configManager.loadConfig()
+        let savedConfig: CanvasConfig
+        switch bootstrapMode {
+        case .normal:
+            savedConfig = configManager.loadConfig()
+            coursePreferences = preferenceManager.loadPreferences()
+            fileDownloadSnapshot = fileDownloadManager.loadSnapshot()
+            recentSearchTerms = recentSearchManager.loadTerms()
+        case .uiTests:
+            savedConfig = CanvasConfig()
+            coursePreferences = CoursePreferencesSnapshot()
+            fileDownloadSnapshot = FileDownloadSnapshot()
+            recentSearchTerms = []
+        }
+
         config = savedConfig
-        coursePreferences = preferenceManager.loadPreferences()
-        fileDownloadSnapshot = fileDownloadManager.loadSnapshot()
         downloadingFileIDs = []
         offlineBulkDownloadProgress = nil
         preloadingCourseIDs = []
-        recentSearchTerms = recentSearchManager.loadTerms()
         inboxConversations = []
         loadingInbox = false
         inboxLastLoadedAt = nil
@@ -99,47 +195,40 @@ final class CanvasStore: ObservableObject {
             telegramManager: .shared,
             historyManager: .shared
         )
+        courseAssignmentsByCourseID = [:]
+        loadingCourseAssignmentIDs = []
+        courseModulesByCourseID = [:]
+        loadingCourseModuleIDs = []
+        courseFoldersByCourseID = [:]
+        courseFilesByFolderID = [:]
+        loadingCourseFolderIDs = []
+        loadingFolderFileIDs = []
+        courseAnnouncementsByCourseID = [:]
+        loadingCourseAnnouncementIDs = []
+        courseSyllabusByCourseID = [:]
+        loadingCourseSyllabusIDs = []
+        coursePeopleByCourseID = [:]
+        loadingCoursePeopleIDs = []
+        moduleItemDetailsByKey = [:]
+        loadingModuleItemDetailKeys = []
 
-        if let snapshot = databaseManager.loadSnapshot() {
-            courses = snapshot.courses
-            courseAssignmentsByCourseID = [:]
-            loadingCourseAssignmentIDs = []
-            courseModulesByCourseID = [:]
-            loadingCourseModuleIDs = []
-            courseFoldersByCourseID = [:]
-            courseFilesByFolderID = [:]
-            loadingCourseFolderIDs = []
-            loadingFolderFileIDs = []
-            courseAnnouncementsByCourseID = [:]
-            loadingCourseAnnouncementIDs = []
-            courseSyllabusByCourseID = [:]
-            loadingCourseSyllabusIDs = []
-            coursePeopleByCourseID = [:]
-            loadingCoursePeopleIDs = []
-            moduleItemDetailsByKey = [:]
-            loadingModuleItemDetailKeys = []
-            upcomingEvents = snapshot.upcomingEvents
-            missingSubmissions = snapshot.missingSubmissions
-            profile = snapshot.profile
-            lastSyncedAt = snapshot.syncedAt
-        } else {
+        switch bootstrapMode {
+        case .normal:
+            if let snapshot = databaseManager.loadSnapshot() {
+                courses = snapshot.courses
+                upcomingEvents = snapshot.upcomingEvents
+                missingSubmissions = snapshot.missingSubmissions
+                profile = snapshot.profile
+                lastSyncedAt = snapshot.syncedAt
+            } else {
+                courses = []
+                upcomingEvents = []
+                missingSubmissions = []
+                profile = nil
+                lastSyncedAt = nil
+            }
+        case .uiTests:
             courses = []
-            courseAssignmentsByCourseID = [:]
-            loadingCourseAssignmentIDs = []
-            courseModulesByCourseID = [:]
-            loadingCourseModuleIDs = []
-            courseFoldersByCourseID = [:]
-            courseFilesByFolderID = [:]
-            loadingCourseFolderIDs = []
-            loadingFolderFileIDs = []
-            courseAnnouncementsByCourseID = [:]
-            loadingCourseAnnouncementIDs = []
-            courseSyllabusByCourseID = [:]
-            loadingCourseSyllabusIDs = []
-            coursePeopleByCourseID = [:]
-            loadingCoursePeopleIDs = []
-            moduleItemDetailsByKey = [:]
-            loadingModuleItemDetailKeys = []
             upcomingEvents = []
             missingSubmissions = []
             profile = nil
@@ -148,7 +237,10 @@ final class CanvasStore: ObservableObject {
 
         selectedCourseID = courses.first?.id
         relativeFormatter.unitsStyle = .full
-        restoreCourseDetailCache()
+
+        if bootstrapMode == .normal {
+            restoreCourseDetailCache()
+        }
     }
 
     deinit {
@@ -474,6 +566,38 @@ final class CanvasStore: ObservableObject {
         }
 
         return missingSubmissions.filter { $0.courseID == courseID }
+    }
+
+    func prioritizedMissingSubmissions(courseID: Int?) -> [MissingSubmission] {
+        filteredMissingSubmissions(courseID: courseID)
+            .sorted(by: priorityMissingSubmissionPrecedes)
+    }
+
+    func prioritizedUpcomingEvents(courseID: Int?) -> [UpcomingEvent] {
+        filteredUpcomingEvents(courseID: courseID)
+            .sorted(by: priorityUpcomingEventPrecedes)
+    }
+
+    func priorityNowItems(courseID: Int?, limit: Int = 3) -> [DashboardPriorityItem] {
+        let items = prioritizedMissingSubmissions(courseID: courseID).map {
+            DashboardPriorityItem(kind: .missing($0), score: priorityScore(for: $0))
+        } + prioritizedUpcomingEvents(courseID: courseID).compactMap { event in
+            let score = priorityScore(for: event)
+            guard score > 0 else {
+                return nil
+            }
+
+            return DashboardPriorityItem(kind: .upcoming(event), score: score)
+        }
+
+        return items
+            .sorted(by: priorityItemPrecedes)
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    func dashboardFocusItem(courseID: Int?) -> DashboardPriorityItem? {
+        priorityNowItems(courseID: courseID, limit: 1).first
     }
 
     func modules(for courseID: Int?) -> [CourseModule] {
@@ -1718,6 +1842,113 @@ final class CanvasStore: ObservableObject {
         }
 
         return lhs.displaySubject.localizedCaseInsensitiveCompare(rhs.displaySubject) == .orderedAscending
+    }
+
+    private func priorityMissingSubmissionPrecedes(_ lhs: MissingSubmission, _ rhs: MissingSubmission) -> Bool {
+        priorityItemPrecedes(
+            DashboardPriorityItem(kind: .missing(lhs), score: priorityScore(for: lhs)),
+            DashboardPriorityItem(kind: .missing(rhs), score: priorityScore(for: rhs))
+        )
+    }
+
+    private func priorityUpcomingEventPrecedes(_ lhs: UpcomingEvent, _ rhs: UpcomingEvent) -> Bool {
+        priorityItemPrecedes(
+            DashboardPriorityItem(kind: .upcoming(lhs), score: priorityScore(for: lhs)),
+            DashboardPriorityItem(kind: .upcoming(rhs), score: priorityScore(for: rhs))
+        )
+    }
+
+    private func priorityItemPrecedes(_ lhs: DashboardPriorityItem, _ rhs: DashboardPriorityItem) -> Bool {
+        if lhs.score != rhs.score {
+            return lhs.score > rhs.score
+        }
+
+        switch (lhs.date, rhs.date) {
+        case let (left?, right?):
+            if left != right {
+                return left < right
+            }
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        case (.none, .none):
+            break
+        }
+
+        if lhs.isMissing != rhs.isMissing {
+            return lhs.isMissing
+        }
+
+        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+    }
+
+    private func priorityScore(for submission: MissingSubmission) -> Int {
+        var score = 200
+
+        if let dueAt = submission.dueAt {
+            let day: TimeInterval = 24 * 60 * 60
+            let delta = dueAt.timeIntervalSince(now())
+
+            if delta < 0 {
+                let overdueDays = min(Int(abs(delta) / day), 14)
+                score += 80 + overdueDays * 6
+            } else if delta <= day {
+                score += 44
+            } else if delta <= 3 * day {
+                score += 28
+            } else if delta <= 7 * day {
+                score += 18
+            } else {
+                score += 8
+            }
+        } else {
+            score += 12
+        }
+
+        score += coursePriorityBonus(for: submission.courseID)
+        return score
+    }
+
+    private func priorityScore(for event: UpcomingEvent) -> Int {
+        guard let date = event.displayDate else {
+            return 0
+        }
+
+        let day: TimeInterval = 24 * 60 * 60
+        let delta = date.timeIntervalSince(now())
+        guard delta >= 0 else {
+            return event.isAssignment ? 34 + coursePriorityBonus(for: event.courseID) : 0
+        }
+
+        var score = event.isAssignment ? 118 : 82
+        if delta <= day {
+            score += 36
+        } else if delta <= 3 * day {
+            score += 24
+        } else if delta <= 7 * day {
+            score += 14
+        } else {
+            score += 6
+        }
+
+        score += coursePriorityBonus(for: event.courseID)
+        return score
+    }
+
+    private func coursePriorityBonus(for courseID: Int?) -> Int {
+        guard let courseID else {
+            return 0
+        }
+
+        var bonus = 0
+        if coursePreferences.pinnedCourseIDs.contains(courseID) {
+            bonus += 12
+        }
+        if coursePreferences.offlinePriorityCourseIDs.contains(courseID) {
+            bonus += 6
+        }
+        return bonus
     }
 
     private func persistFileDownloadSnapshot() {

@@ -1617,6 +1617,51 @@ struct CourseAssignment: Codable, Identifiable, Hashable {
         submission?.gradedAt ?? submission?.submittedAt ?? dueAt
     }
 
+    var canvasURL: URL? {
+        htmlURL
+    }
+
+    var submissionURL: URL? {
+        guard let canvasURL else {
+            return nil
+        }
+
+        let path = canvasURL.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let components = path.split(separator: "/")
+        guard components.count >= 4,
+              components[0] == "courses",
+              components[2] == "assignments"
+        else {
+            return canvasURL
+        }
+
+        var submissionURL = canvasURL
+        submissionURL.append(path: "submissions")
+        return submissionURL
+    }
+
+    var showsSubmissionAction: Bool {
+        if submission?.isSubmitted == true || hasSubmittedSubmissions == true {
+            return submissionURL != nil
+        }
+
+        guard let submissionTypes else {
+            return submissionURL != nil
+        }
+
+        let normalizedSubmissionTypes = Set(
+            submissionTypes.map {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            }
+        )
+        let blockedSubmissionTypes: Set<String> = ["none", "on_paper"]
+        return !normalizedSubmissionTypes.isDisjoint(with: blockedSubmissionTypes) ? false : submissionURL != nil
+    }
+
+    var submissionActionTitle: String {
+        submission?.isSubmitted == true || hasSubmittedSubmissions == true ? "View Submission" : "Open Submission"
+    }
+
     func matchesSearch(_ query: String) -> Bool {
         workspaceSearchMatches(
             query,
