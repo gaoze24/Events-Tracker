@@ -40,6 +40,10 @@ enum DisplayFormatters {
         return dateTime.string(from: date)
     }
 
+    static func rowDateText(date: Date?, allDay: Bool = false) -> String {
+        formatted(date: date, allDay: allDay)
+    }
+
     static func relativeString(date: Date?) -> String? {
         guard let date else {
             return nil
@@ -147,17 +151,11 @@ struct UpcomingEventRow: View {
 
             HStack(spacing: 12) {
                 Label(
-                    DisplayFormatters.formatted(date: event.displayDate, allDay: event.allDay),
+                    DisplayFormatters.rowDateText(date: event.displayDate, allDay: event.allDay),
                     systemImage: "clock"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
-
-                if let relative = DisplayFormatters.relativeString(date: event.displayDate) {
-                    Text(relative)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
 
                 Spacer()
 
@@ -196,17 +194,11 @@ struct MissingSubmissionRow: View {
 
             HStack(spacing: 12) {
                 Label(
-                    DisplayFormatters.formatted(date: submission.dueAt),
+                    DisplayFormatters.rowDateText(date: submission.dueAt),
                     systemImage: "exclamationmark.triangle"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
-
-                if let relative = DisplayFormatters.relativeString(date: submission.dueAt) {
-                    Text(relative)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
 
                 Spacer()
 

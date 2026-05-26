@@ -35,6 +35,7 @@ struct GlobalSearchIndex {
             }
         }
         var candidates: [GlobalSearchResult] = []
+        let missingAssignmentIdentities = Set(missingSubmissions.map(\.assignmentIdentity))
 
         for course in courses {
             candidates.append(makeResult(
@@ -53,6 +54,11 @@ struct GlobalSearchIndex {
         }
 
         for event in upcomingEvents {
+            if let assignmentIdentity = event.assignmentIdentity,
+               missingAssignmentIdentities.contains(assignmentIdentity) {
+                continue
+            }
+
             candidates.append(makeResult(
                 id: "event-\(event.id)",
                 kind: .event,

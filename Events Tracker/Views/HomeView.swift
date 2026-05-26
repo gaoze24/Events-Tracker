@@ -34,16 +34,38 @@ struct HomeView: View {
         store.dashboardFocusItem(courseID: selectedCourseID)
     }
 
+    private var secondaryPriorityNowItems: [CanvasStore.DashboardPriorityItem] {
+        guard let focusItem else {
+            return priorityNowItems
+        }
+
+        return priorityNowItems.filter { $0.id != focusItem.id }
+    }
+
+    private var highlightedPriorityIDs: Set<String> {
+        Set(priorityNowItems.map(\.id))
+    }
+
     private var todayEvents: [UpcomingEvent] {
-        prioritizedUpcomingEvents.filter { $0.dashboardWindow() == .today }
+        prioritizedUpcomingEvents
+            .filter { !highlightedPriorityIDs.contains(Self.priorityID(for: $0)) }
+            .filter { $0.dashboardWindow() == .today }
     }
 
     private var thisWeekEvents: [UpcomingEvent] {
-        prioritizedUpcomingEvents.filter { $0.dashboardWindow() == .thisWeek }
+        prioritizedUpcomingEvents
+            .filter { !highlightedPriorityIDs.contains(Self.priorityID(for: $0)) }
+            .filter { $0.dashboardWindow() == .thisWeek }
     }
 
     private var laterEvents: [UpcomingEvent] {
-        prioritizedUpcomingEvents.filter { $0.dashboardWindow() == .later }
+        prioritizedUpcomingEvents
+            .filter { !highlightedPriorityIDs.contains(Self.priorityID(for: $0)) }
+            .filter { $0.dashboardWindow() == .later }
+    }
+
+    private var overdueSectionSubmissions: [MissingSubmission] {
+        prioritizedMissingSubmissions.filter { !highlightedPriorityIDs.contains(Self.priorityID(for: $0)) }
     }
 
     private var selectedCourseName: String {
@@ -146,7 +168,7 @@ struct HomeView: View {
 
     @ViewBuilder
     private var prioritySections: some View {
-        if prioritizedMissingSubmissions.isEmpty && todayEvents.isEmpty && thisWeekEvents.isEmpty && laterEvents.isEmpty {
+        if priorityNowItems.isEmpty && overdueSectionSubmissions.isEmpty && todayEvents.isEmpty && thisWeekEvents.isEmpty && laterEvents.isEmpty {
             ContentUnavailableView(
                 "All Clear",
                 systemImage: "checkmark.circle",
@@ -155,36 +177,36 @@ struct HomeView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 36)
         } else {
-            if !priorityNowItems.isEmpty {
+            if !secondaryPriorityNowItems.isEmpty {
                 HomeSection(
                     title: "Priority Now",
-                    subtitle: "\(priorityNowItems.count) item\(priorityNowItems.count == 1 ? "" : "s") worth handling first",
+                    subtitle: "\(secondaryPriorityNowItems.count) more item\(secondaryPriorityNowItems.count == 1 ? "" : "s") worth handling first",
                     accentColor: .blue
                 ) {
-                    ForEach(priorityNowItems) { item in
+                    ForEach(secondaryPriorityNowItems) { item in
                         HomePriorityRow(
                             item: item,
                             courseName: store.courseName(for: item.courseID)
                         )
-                        if item.id != priorityNowItems.last?.id {
+                        if item.id != secondaryPriorityNowItems.last?.id {
                             Divider().padding(.leading, 32)
                         }
                     }
                 }
             }
 
-            if !prioritizedMissingSubmissions.isEmpty {
+            if !overdueSectionSubmissions.isEmpty {
                 HomeSection(
                     title: "Overdue",
-                    subtitle: "\(prioritizedMissingSubmissions.count) item\(prioritizedMissingSubmissions.count == 1 ? "" : "s") need attention",
+                    subtitle: "\(overdueSectionSubmissions.count) item\(overdueSectionSubmissions.count == 1 ? "" : "s") need attention",
                     accentColor: .red
                 ) {
-                    ForEach(Array(prioritizedMissingSubmissions.prefix(6))) { submission in
+                    ForEach(Array(overdueSectionSubmissions.prefix(6))) { submission in
                         HomeMissingRow(
                             submission: submission,
                             courseName: store.courseName(for: submission.courseID)
                         )
-                        if submission.id != prioritizedMissingSubmissions.prefix(6).last?.id {
+                        if submission.id != overdueSectionSubmissions.prefix(6).last?.id {
                             Divider().padding(.leading, 32)
                         }
                     }
@@ -245,6 +267,14 @@ struct HomeView: View {
                 }
             }
         }
+    }
+
+    private static func priorityID(for submission: MissingSubmission) -> String {
+        "missing-\(submission.id)"
+    }
+
+    private static func priorityID(for event: UpcomingEvent) -> String {
+        "event-\(event.id)"
     }
 
 }

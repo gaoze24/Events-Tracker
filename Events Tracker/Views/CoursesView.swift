@@ -1098,13 +1098,9 @@ private struct CourseAnnouncementRow: View {
 
             HStack(spacing: 12) {
                 Label(
-                    DisplayFormatters.formatted(date: announcement.displayDate),
+                    DisplayFormatters.rowDateText(date: announcement.displayDate),
                     systemImage: "clock"
                 )
-
-                if let relative = DisplayFormatters.relativeString(date: announcement.displayDate) {
-                    Text(relative)
-                }
 
                 Spacer()
 

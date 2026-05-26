@@ -360,7 +360,7 @@ final class CanvasStore: ObservableObject {
             applySnapshot(snapshot)
             try databaseManager.saveSnapshot(snapshot)
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
 
         isSyncing = false
@@ -422,7 +422,7 @@ final class CanvasStore: ObservableObject {
             loadingInbox = false
             inboxLastLoadedAt = nil
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 
@@ -553,11 +553,17 @@ final class CanvasStore: ObservableObject {
     }
 
     func filteredUpcomingEvents(courseID: Int?) -> [UpcomingEvent] {
-        guard let courseID else {
-            return upcomingEvents
+        let events: [UpcomingEvent]
+        let missing: [MissingSubmission]
+        if let courseID {
+            events = upcomingEvents.filter { $0.courseID == courseID }
+            missing = missingSubmissions.filter { $0.courseID == courseID }
+        } else {
+            events = upcomingEvents
+            missing = missingSubmissions
         }
 
-        return upcomingEvents.filter { $0.courseID == courseID }
+        return upcomingEventsExcludingMissingAssignments(events, missingSubmissions: missing)
     }
 
     func filteredMissingSubmissions(courseID: Int?) -> [MissingSubmission] {
@@ -566,6 +572,20 @@ final class CanvasStore: ObservableObject {
         }
 
         return missingSubmissions.filter { $0.courseID == courseID }
+    }
+
+    private func upcomingEventsExcludingMissingAssignments(
+        _ events: [UpcomingEvent],
+        missingSubmissions: [MissingSubmission]
+    ) -> [UpcomingEvent] {
+        let missingAssignmentIdentities = Set(missingSubmissions.map(\.assignmentIdentity))
+        return events.filter { event in
+            guard let assignmentIdentity = event.assignmentIdentity else {
+                return true
+            }
+
+            return !missingAssignmentIdentities.contains(assignmentIdentity)
+        }
     }
 
     func prioritizedMissingSubmissions(courseID: Int?) -> [MissingSubmission] {
@@ -1027,7 +1047,7 @@ final class CanvasStore: ObservableObject {
             if let courseID = courseID(containingFolderID: folderID) {
                 handleCourseDetailLoadFailure(error, courseID: courseID)
             } else {
-                errorMessage = error.localizedDescription
+                displayError(error)
             }
         }
 
@@ -1117,7 +1137,7 @@ final class CanvasStore: ObservableObject {
             fileDownloadSnapshot.updatedAt = now()
             persistFileDownloadSnapshot()
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 
@@ -1140,7 +1160,7 @@ final class CanvasStore: ObservableObject {
             fileDownloadSnapshot = snapshot
             persistFileDownloadSnapshot()
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 
@@ -1155,7 +1175,7 @@ final class CanvasStore: ObservableObject {
         do {
             try databaseManager.clearSnapshot()
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 
@@ -1165,7 +1185,7 @@ final class CanvasStore: ObservableObject {
         do {
             try detailCacheManager.clearCache()
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 
@@ -1215,7 +1235,7 @@ final class CanvasStore: ObservableObject {
         GlobalSearchIndex.results(
             query: query,
             courses: courses,
-            upcomingEvents: upcomingEvents,
+            upcomingEvents: filteredUpcomingEvents(courseID: nil),
             missingSubmissions: missingSubmissions,
             assignmentsByCourseID: courseAssignmentsByCourseID,
             modulesByCourseID: courseModulesByCourseID,
@@ -1245,7 +1265,7 @@ final class CanvasStore: ObservableObject {
         do {
             try recentSearchManager.clearTerms()
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 
@@ -1284,7 +1304,7 @@ final class CanvasStore: ObservableObject {
                 .sorted(by: sortInboxConversations)
             inboxLastLoadedAt = now()
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
 
         loadingInbox = false
@@ -1523,7 +1543,7 @@ final class CanvasStore: ObservableObject {
             markCourseDetailAccess(courseID)
             persistCourseDetailCache()
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
 
         loadingModuleItemDetailKeys.remove(key.rawValue)
@@ -1655,12 +1675,33 @@ final class CanvasStore: ObservableObject {
     }
 
     private func handleCourseDetailLoadFailure(_ error: Error, courseID: Int) {
+        guard !isCancellation(error) else {
+            return
+        }
+
         if restoreCachedCourseDetails(for: courseID) {
             errorMessage = "Could not refresh Canvas. Showing cached data from offline storage."
             return
         }
 
+        displayError(error)
+    }
+
+    private func displayError(_ error: Error) {
+        guard !isCancellation(error) else {
+            return
+        }
+
         errorMessage = error.localizedDescription
+    }
+
+    private func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError {
+            return true
+        }
+
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
     }
 
     private func restoreCachedCourseDetails(for courseID: Int) -> Bool {
@@ -1685,7 +1726,7 @@ final class CanvasStore: ObservableObject {
         do {
             try detailCacheManager.saveCache(snapshot)
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 
@@ -1712,7 +1753,7 @@ final class CanvasStore: ObservableObject {
         do {
             try preferenceManager.savePreferences(coursePreferences)
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 
@@ -1823,7 +1864,7 @@ final class CanvasStore: ObservableObject {
                 inboxConversations.sort(by: sortInboxConversations)
             }
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 
@@ -1955,7 +1996,7 @@ final class CanvasStore: ObservableObject {
         do {
             try fileDownloadManager.saveSnapshot(fileDownloadSnapshot)
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 
@@ -1963,7 +2004,7 @@ final class CanvasStore: ObservableObject {
         do {
             try recentSearchManager.saveTerms(recentSearchTerms)
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 

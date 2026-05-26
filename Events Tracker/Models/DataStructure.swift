@@ -1446,6 +1446,11 @@ struct CanvasAssignment: Codable, Hashable {
     }
 }
 
+struct CanvasAssignmentIdentity: Hashable {
+    let courseID: Int?
+    let assignmentID: Int
+}
+
 enum CourseAssignmentStatus: String, Codable, Hashable {
     case missing = "Missing"
     case late = "Late"
@@ -1776,6 +1781,14 @@ struct UpcomingEvent: Codable, Identifiable, Hashable {
         assignment != nil
     }
 
+    var assignmentIdentity: CanvasAssignmentIdentity? {
+        guard let assignment else {
+            return nil
+        }
+
+        return CanvasAssignmentIdentity(courseID: assignment.courseID ?? courseID, assignmentID: assignment.id)
+    }
+
     var kindLabel: String {
         isAssignment ? "Assignment" : "Event"
     }
@@ -1843,6 +1856,10 @@ struct MissingSubmission: Codable, Identifiable, Hashable {
         }
 
         return dueAt < referenceDate
+    }
+
+    var assignmentIdentity: CanvasAssignmentIdentity {
+        CanvasAssignmentIdentity(courseID: courseID, assignmentID: id)
     }
 }
 
@@ -1923,7 +1940,15 @@ struct CalendarEventItem: Identifiable, Hashable {
         upcomingEvents: [UpcomingEvent],
         missingSubmissions: [MissingSubmission]
     ) -> [CalendarEventItem] {
-        let items = upcomingEvents.map { CalendarEventItem(kind: .upcoming($0)) }
+        let missingAssignmentIdentities = Set(missingSubmissions.map(\.assignmentIdentity))
+        let visibleUpcomingEvents = upcomingEvents.filter { event in
+            guard let assignmentIdentity = event.assignmentIdentity else {
+                return true
+            }
+
+            return !missingAssignmentIdentities.contains(assignmentIdentity)
+        }
+        let items = visibleUpcomingEvents.map { CalendarEventItem(kind: .upcoming($0)) }
             + missingSubmissions.map { CalendarEventItem(kind: .missing($0)) }
 
         return items.sorted(by: sort)

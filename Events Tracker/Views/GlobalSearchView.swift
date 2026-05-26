@@ -29,8 +29,13 @@ struct GlobalSearchView: View {
     }
 
     private var groupedResults: [(GlobalSearchResultKind, [GlobalSearchResult])] {
-        GlobalSearchResultKind.allCases.compactMap { kind in
-            let matches = visibleResults.filter { $0.kind == kind }
+        let topResultIDs = Set(topResults.map(\.id))
+        let sectionResults = selectedKind == nil
+            ? visibleResults.filter { !topResultIDs.contains($0.id) }
+            : visibleResults
+
+        return GlobalSearchResultKind.allCases.compactMap { kind in
+            let matches = sectionResults.filter { $0.kind == kind }
             return matches.isEmpty ? nil : (kind, matches)
         }
     }
@@ -40,7 +45,8 @@ struct GlobalSearchView: View {
             return "\(visibleResults.count) \(selectedKind.rawValue.lowercased()) result\(visibleResults.count == 1 ? "" : "s")"
         }
 
-        return "\(visibleResults.count) results across \(groupedResults.count) sections"
+        let sectionCount = groupedResults.count + (topResults.isEmpty ? 0 : 1)
+        return "\(visibleResults.count) results across \(sectionCount) sections"
     }
 
     var body: some View {
