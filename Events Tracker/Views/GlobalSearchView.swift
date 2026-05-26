@@ -5,6 +5,43 @@
 
 import SwiftUI
 
+struct GlobalSearchDisplayState {
+    let visibleResults: [GlobalSearchResult]
+    let topResults: [GlobalSearchResult]
+    let groupedResults: [(GlobalSearchResultKind, [GlobalSearchResult])]
+    let resultCountLabel: String
+
+    init(results: [GlobalSearchResult], selectedKind: GlobalSearchResultKind?) {
+        let filteredResults = results.filter { $0.matchesKind(selectedKind) }
+        visibleResults = filteredResults
+
+        if let selectedKind {
+            topResults = []
+            groupedResults = GlobalSearchResultKind.allCases.compactMap { kind in
+                guard kind == selectedKind else {
+                    return nil
+                }
+
+                return filteredResults.isEmpty ? nil : (kind, filteredResults)
+            }
+            resultCountLabel = "\(filteredResults.count) \(selectedKind.rawValue.lowercased()) result\(filteredResults.count == 1 ? "" : "s")"
+            return
+        }
+
+        let top = Array(filteredResults.prefix(5))
+        topResults = top
+        let topResultIDs = Set(top.map(\.id))
+        let sectionResults = filteredResults.filter { !topResultIDs.contains($0.id) }
+        let resultsByKind = Dictionary(grouping: sectionResults, by: \.kind)
+        groupedResults = GlobalSearchResultKind.allCases.compactMap { kind in
+            let matches = resultsByKind[kind] ?? []
+            return matches.isEmpty ? nil : (kind, matches)
+        }
+        let sectionCount = groupedResults.count + (top.isEmpty ? 0 : 1)
+        resultCountLabel = "\(filteredResults.count) results across \(sectionCount) sections"
+    }
+}
+
 struct GlobalSearchView: View {
     @EnvironmentObject private var store: CanvasStore
     let onNavigateToCourse: () -> Void
@@ -12,44 +49,12 @@ struct GlobalSearchView: View {
     @State private var query = ""
     @State private var selectedKind: GlobalSearchResultKind?
 
-    private var allResults: [GlobalSearchResult] {
-        store.globalSearchResults(for: query)
-    }
-
-    private var visibleResults: [GlobalSearchResult] {
-        allResults.filter { $0.matchesKind(selectedKind) }
-    }
-
-    private var topResults: [GlobalSearchResult] {
-        guard selectedKind == nil else {
-            return []
-        }
-
-        return Array(visibleResults.prefix(5))
-    }
-
-    private var groupedResults: [(GlobalSearchResultKind, [GlobalSearchResult])] {
-        let topResultIDs = Set(topResults.map(\.id))
-        let sectionResults = selectedKind == nil
-            ? visibleResults.filter { !topResultIDs.contains($0.id) }
-            : visibleResults
-
-        return GlobalSearchResultKind.allCases.compactMap { kind in
-            let matches = sectionResults.filter { $0.kind == kind }
-            return matches.isEmpty ? nil : (kind, matches)
-        }
-    }
-
-    private var resultCountLabel: String {
-        if let selectedKind {
-            return "\(visibleResults.count) \(selectedKind.rawValue.lowercased()) result\(visibleResults.count == 1 ? "" : "s")"
-        }
-
-        let sectionCount = groupedResults.count + (topResults.isEmpty ? 0 : 1)
-        return "\(visibleResults.count) results across \(sectionCount) sections"
-    }
-
     var body: some View {
+        let displayState = GlobalSearchDisplayState(
+            results: store.globalSearchResults(for: query),
+            selectedKind: selectedKind
+        )
+
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -65,26 +70,26 @@ struct GlobalSearchView: View {
 
                 if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     recentSearches
-                } else if visibleResults.isEmpty {
+                } else if displayState.visibleResults.isEmpty {
                     SetupPromptView(
                         title: "No Matching Results",
                         message: "Try another term or load more course sections first. Search only covers currently synced and cached data."
                     )
                 } else {
                     VStack(alignment: .leading, spacing: 18) {
-                        Text(resultCountLabel)
+                        Text(displayState.resultCountLabel)
                             .font(.headline)
 
-                        if !topResults.isEmpty {
+                        if !displayState.topResults.isEmpty {
                             VStack(alignment: .leading, spacing: 10) {
                                 Text("Top Results")
                                     .font(.headline)
 
-                                resultSection(topResults)
+                                resultSection(displayState.topResults)
                             }
                         }
 
-                        ForEach(groupedResults, id: \.0) { kind, results in
+                        ForEach(displayState.groupedResults, id: \.0) { kind, results in
                             VStack(alignment: .leading, spacing: 10) {
                                 Label(kind.rawValue, systemImage: kind.systemImage)
                                     .font(.headline)

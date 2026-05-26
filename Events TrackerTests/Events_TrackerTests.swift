@@ -2993,6 +2993,60 @@ struct Events_TrackerTests {
         #expect(results.first?.kind == .missing)
     }
 
+    @Test func globalSearchDisplayStateReusesFilteredResultsForSections() async throws {
+        let course = GlobalSearchResult(
+            id: "course-1",
+            kind: .course,
+            title: "Biology",
+            subtitle: nil,
+            courseID: 1,
+            courseName: "Biology",
+            url: nil,
+            searchableText: "Biology",
+            score: 100
+        )
+        let assignment = GlobalSearchResult(
+            id: "assignment-1-2",
+            kind: .assignment,
+            title: "Lab",
+            subtitle: "Upcoming",
+            courseID: 1,
+            courseName: "Biology",
+            url: nil,
+            searchableText: "Lab",
+            score: 90
+        )
+        let event = GlobalSearchResult(
+            id: "event-3",
+            kind: .event,
+            title: "Review",
+            subtitle: "Event",
+            courseID: 1,
+            courseName: "Biology",
+            url: nil,
+            searchableText: "Review",
+            score: 80
+        )
+
+        let allTypesState = GlobalSearchDisplayState(
+            results: [course, assignment, event],
+            selectedKind: nil
+        )
+        let assignmentState = GlobalSearchDisplayState(
+            results: [course, assignment, event],
+            selectedKind: .assignment
+        )
+
+        #expect(allTypesState.visibleResults.map(\.id) == ["course-1", "assignment-1-2", "event-3"])
+        #expect(allTypesState.topResults.map(\.id) == ["course-1", "assignment-1-2", "event-3"])
+        #expect(allTypesState.groupedResults.isEmpty)
+        #expect(allTypesState.resultCountLabel == "3 results across 1 sections")
+        #expect(assignmentState.visibleResults.map(\.id) == ["assignment-1-2"])
+        #expect(assignmentState.topResults.isEmpty)
+        #expect(assignmentState.groupedResults.first?.0 == .assignment)
+        #expect(assignmentState.resultCountLabel == "1 assignment result")
+    }
+
     @MainActor
     @Test func canvasStorePriorityNowPrefersMissingWorkOverPinnedUpcomingEvents() async throws {
         let dueSoon = Date(timeIntervalSince1970: 1_710_000_000 + 2 * 60 * 60)
@@ -3039,6 +3093,58 @@ struct Events_TrackerTests {
         let items = harness.store.priorityNowItems(courseID: nil)
         #expect(items.first?.title == "Problem Set")
         #expect(harness.store.dashboardFocusItem(courseID: nil)?.title == "Problem Set")
+    }
+
+    @Test func homeDashboardDisplayStateReusesPrioritizedInputs() async throws {
+        let referenceDate = Date()
+        let missing = MissingSubmission(
+            id: 10,
+            name: "Problem Set",
+            dueAt: referenceDate.addingTimeInterval(-60 * 60),
+            courseID: 1,
+            htmlURL: nil,
+            pointsPossible: 10
+        )
+        let highlightedEvent = UpcomingEvent(
+            id: "event-highlighted",
+            title: "Quiz",
+            details: nil,
+            startAt: referenceDate.addingTimeInterval(60 * 60),
+            endAt: referenceDate.addingTimeInterval(60 * 60),
+            allDay: false,
+            contextCode: "course_1",
+            htmlURL: nil,
+            workflowState: "active",
+            assignment: nil
+        )
+        let laterEvent = UpcomingEvent(
+            id: "event-later",
+            title: "Project",
+            details: nil,
+            startAt: referenceDate.addingTimeInterval(9 * 24 * 60 * 60),
+            endAt: referenceDate.addingTimeInterval(9 * 24 * 60 * 60),
+            allDay: false,
+            contextCode: "course_1",
+            htmlURL: nil,
+            workflowState: "active",
+            assignment: nil
+        )
+        let state = HomeDashboardDisplayState(
+            prioritizedMissingSubmissions: [missing],
+            prioritizedUpcomingEvents: [highlightedEvent, laterEvent],
+            priorityNowItems: [
+                CanvasStore.DashboardPriorityItem(kind: .missing(missing), score: 200),
+                CanvasStore.DashboardPriorityItem(kind: .upcoming(highlightedEvent), score: 100)
+            ],
+            referenceDate: referenceDate
+        )
+
+        #expect(state.focusItem?.title == "Problem Set")
+        #expect(state.secondaryPriorityNowItems.map(\.title) == ["Quiz"])
+        #expect(state.overdueSectionSubmissions.isEmpty)
+        #expect(state.todayEvents.isEmpty)
+        #expect(state.thisWeekEvents.isEmpty)
+        #expect(state.laterEvents.map(\.title) == ["Project"])
     }
 
     @MainActor

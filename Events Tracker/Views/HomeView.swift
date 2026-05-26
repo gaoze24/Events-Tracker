@@ -7,6 +7,60 @@
 
 import SwiftUI
 
+struct HomeDashboardDisplayState {
+    let prioritizedMissingSubmissions: [MissingSubmission]
+    let priorityNowItems: [CanvasStore.DashboardPriorityItem]
+    let focusItem: CanvasStore.DashboardPriorityItem?
+    let secondaryPriorityNowItems: [CanvasStore.DashboardPriorityItem]
+    let overdueSectionSubmissions: [MissingSubmission]
+    let todayEvents: [UpcomingEvent]
+    let thisWeekEvents: [UpcomingEvent]
+    let laterEvents: [UpcomingEvent]
+
+    init(
+        prioritizedMissingSubmissions: [MissingSubmission],
+        prioritizedUpcomingEvents: [UpcomingEvent],
+        priorityNowItems: [CanvasStore.DashboardPriorityItem],
+        referenceDate: Date = Date()
+    ) {
+        self.prioritizedMissingSubmissions = prioritizedMissingSubmissions
+        self.priorityNowItems = priorityNowItems
+        focusItem = priorityNowItems.first
+
+        if let focusItem {
+            secondaryPriorityNowItems = priorityNowItems.filter { $0.id != focusItem.id }
+        } else {
+            secondaryPriorityNowItems = priorityNowItems
+        }
+
+        let highlightedPriorityIDs = Set(priorityNowItems.map(\.id))
+        overdueSectionSubmissions = prioritizedMissingSubmissions.filter {
+            !highlightedPriorityIDs.contains(Self.priorityID(for: $0))
+        }
+
+        let secondaryUpcomingEvents = prioritizedUpcomingEvents.filter {
+            !highlightedPriorityIDs.contains(Self.priorityID(for: $0))
+        }
+        todayEvents = secondaryUpcomingEvents.filter {
+            $0.dashboardWindow(referenceDate: referenceDate) == .today
+        }
+        thisWeekEvents = secondaryUpcomingEvents.filter {
+            $0.dashboardWindow(referenceDate: referenceDate) == .thisWeek
+        }
+        laterEvents = secondaryUpcomingEvents.filter {
+            $0.dashboardWindow(referenceDate: referenceDate) == .later
+        }
+    }
+
+    private static func priorityID(for submission: MissingSubmission) -> String {
+        "missing-\(submission.id)"
+    }
+
+    private static func priorityID(for event: UpcomingEvent) -> String {
+        "event-\(event.id)"
+    }
+}
+
 struct HomeView: View {
     @EnvironmentObject private var store: CanvasStore
     @State private var selectedCourseID: Int?
@@ -16,56 +70,6 @@ struct HomeView: View {
             get: { selectedCourseID },
             set: { selectedCourseID = $0 }
         )
-    }
-
-    private var prioritizedMissingSubmissions: [MissingSubmission] {
-        store.prioritizedMissingSubmissions(courseID: selectedCourseID)
-    }
-
-    private var prioritizedUpcomingEvents: [UpcomingEvent] {
-        store.prioritizedUpcomingEvents(courseID: selectedCourseID)
-    }
-
-    private var priorityNowItems: [CanvasStore.DashboardPriorityItem] {
-        store.priorityNowItems(courseID: selectedCourseID)
-    }
-
-    private var focusItem: CanvasStore.DashboardPriorityItem? {
-        store.dashboardFocusItem(courseID: selectedCourseID)
-    }
-
-    private var secondaryPriorityNowItems: [CanvasStore.DashboardPriorityItem] {
-        guard let focusItem else {
-            return priorityNowItems
-        }
-
-        return priorityNowItems.filter { $0.id != focusItem.id }
-    }
-
-    private var highlightedPriorityIDs: Set<String> {
-        Set(priorityNowItems.map(\.id))
-    }
-
-    private var todayEvents: [UpcomingEvent] {
-        prioritizedUpcomingEvents
-            .filter { !highlightedPriorityIDs.contains(Self.priorityID(for: $0)) }
-            .filter { $0.dashboardWindow() == .today }
-    }
-
-    private var thisWeekEvents: [UpcomingEvent] {
-        prioritizedUpcomingEvents
-            .filter { !highlightedPriorityIDs.contains(Self.priorityID(for: $0)) }
-            .filter { $0.dashboardWindow() == .thisWeek }
-    }
-
-    private var laterEvents: [UpcomingEvent] {
-        prioritizedUpcomingEvents
-            .filter { !highlightedPriorityIDs.contains(Self.priorityID(for: $0)) }
-            .filter { $0.dashboardWindow() == .later }
-    }
-
-    private var overdueSectionSubmissions: [MissingSubmission] {
-        prioritizedMissingSubmissions.filter { !highlightedPriorityIDs.contains(Self.priorityID(for: $0)) }
     }
 
     private var selectedCourseName: String {
@@ -79,17 +83,23 @@ struct HomeView: View {
                 message: "Save your Canvas base URL and personal access token in Settings, then sync to build your dashboard."
             )
         } else {
+            let dashboardState = HomeDashboardDisplayState(
+                prioritizedMissingSubmissions: store.prioritizedMissingSubmissions(courseID: selectedCourseID),
+                prioritizedUpcomingEvents: store.prioritizedUpcomingEvents(courseID: selectedCourseID),
+                priorityNowItems: store.priorityNowItems(courseID: selectedCourseID)
+            )
+
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     header
-                    metrics
+                    metrics(dashboardState)
 
                     HomeFocusCard(
-                        item: focusItem,
+                        item: dashboardState.focusItem,
                         courseName: { store.courseName(for: $0) }
                     )
 
-                    prioritySections
+                    prioritySections(dashboardState)
                 }
                 .padding(24)
             }
@@ -122,7 +132,7 @@ struct HomeView: View {
         }
     }
 
-    private var metrics: some View {
+    private func metrics(_ state: HomeDashboardDisplayState) -> some View {
         LazyVGrid(
             columns: [
                 GridItem(.flexible(), spacing: 12),
@@ -142,15 +152,15 @@ struct HomeView: View {
 
             HomeMetricCard(
                 title: "Overdue",
-                value: "\(prioritizedMissingSubmissions.count)",
-                detail: prioritizedMissingSubmissions.isEmpty ? "No missing work" : "Needs attention",
+                value: "\(state.prioritizedMissingSubmissions.count)",
+                detail: state.prioritizedMissingSubmissions.isEmpty ? "No missing work" : "Needs attention",
                 systemImage: "exclamationmark.circle",
-                tint: prioritizedMissingSubmissions.isEmpty ? .secondary : .red
+                tint: state.prioritizedMissingSubmissions.isEmpty ? .secondary : .red
             )
 
             HomeMetricCard(
                 title: "Today",
-                value: "\(todayEvents.count)",
+                value: "\(state.todayEvents.count)",
                 detail: "Due or scheduled today",
                 systemImage: "sun.max",
                 tint: .orange
@@ -158,7 +168,7 @@ struct HomeView: View {
 
             HomeMetricCard(
                 title: "This Week",
-                value: "\(thisWeekEvents.count)",
+                value: "\(state.thisWeekEvents.count)",
                 detail: "Next 7 days",
                 systemImage: "calendar",
                 tint: .green
@@ -167,8 +177,8 @@ struct HomeView: View {
     }
 
     @ViewBuilder
-    private var prioritySections: some View {
-        if priorityNowItems.isEmpty && overdueSectionSubmissions.isEmpty && todayEvents.isEmpty && thisWeekEvents.isEmpty && laterEvents.isEmpty {
+    private func prioritySections(_ state: HomeDashboardDisplayState) -> some View {
+        if state.priorityNowItems.isEmpty && state.overdueSectionSubmissions.isEmpty && state.todayEvents.isEmpty && state.thisWeekEvents.isEmpty && state.laterEvents.isEmpty {
             ContentUnavailableView(
                 "All Clear",
                 systemImage: "checkmark.circle",
@@ -177,104 +187,96 @@ struct HomeView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 36)
         } else {
-            if !secondaryPriorityNowItems.isEmpty {
+            if !state.secondaryPriorityNowItems.isEmpty {
                 HomeSection(
                     title: "Priority Now",
-                    subtitle: "\(secondaryPriorityNowItems.count) more item\(secondaryPriorityNowItems.count == 1 ? "" : "s") worth handling first",
+                    subtitle: "\(state.secondaryPriorityNowItems.count) more item\(state.secondaryPriorityNowItems.count == 1 ? "" : "s") worth handling first",
                     accentColor: .blue
                 ) {
-                    ForEach(secondaryPriorityNowItems) { item in
+                    ForEach(state.secondaryPriorityNowItems) { item in
                         HomePriorityRow(
                             item: item,
                             courseName: store.courseName(for: item.courseID)
                         )
-                        if item.id != secondaryPriorityNowItems.last?.id {
+                        if item.id != state.secondaryPriorityNowItems.last?.id {
                             Divider().padding(.leading, 32)
                         }
                     }
                 }
             }
 
-            if !overdueSectionSubmissions.isEmpty {
+            if !state.overdueSectionSubmissions.isEmpty {
                 HomeSection(
                     title: "Overdue",
-                    subtitle: "\(overdueSectionSubmissions.count) item\(overdueSectionSubmissions.count == 1 ? "" : "s") need attention",
+                    subtitle: "\(state.overdueSectionSubmissions.count) item\(state.overdueSectionSubmissions.count == 1 ? "" : "s") need attention",
                     accentColor: .red
                 ) {
-                    ForEach(Array(overdueSectionSubmissions.prefix(6))) { submission in
+                    ForEach(Array(state.overdueSectionSubmissions.prefix(6))) { submission in
                         HomeMissingRow(
                             submission: submission,
                             courseName: store.courseName(for: submission.courseID)
                         )
-                        if submission.id != overdueSectionSubmissions.prefix(6).last?.id {
+                        if submission.id != state.overdueSectionSubmissions.prefix(6).last?.id {
                             Divider().padding(.leading, 32)
                         }
                     }
                 }
             }
 
-            if !todayEvents.isEmpty {
+            if !state.todayEvents.isEmpty {
                 HomeSection(
                     title: "Today",
-                    subtitle: "\(todayEvents.count) item\(todayEvents.count == 1 ? "" : "s") scheduled today",
+                    subtitle: "\(state.todayEvents.count) item\(state.todayEvents.count == 1 ? "" : "s") scheduled today",
                     accentColor: .orange
                 ) {
-                    ForEach(todayEvents) { event in
+                    ForEach(state.todayEvents) { event in
                         HomeEventRow(
                             event: event,
                             courseName: store.courseName(for: event.courseID)
                         )
-                        if event.id != todayEvents.last?.id {
+                        if event.id != state.todayEvents.last?.id {
                             Divider().padding(.leading, 32)
                         }
                     }
                 }
             }
 
-            if !thisWeekEvents.isEmpty {
+            if !state.thisWeekEvents.isEmpty {
                 HomeSection(
                     title: "This Week",
-                    subtitle: "\(thisWeekEvents.count) upcoming item\(thisWeekEvents.count == 1 ? "" : "s")",
+                    subtitle: "\(state.thisWeekEvents.count) upcoming item\(state.thisWeekEvents.count == 1 ? "" : "s")",
                     accentColor: .green
                 ) {
-                    ForEach(Array(thisWeekEvents.prefix(8))) { event in
+                    ForEach(Array(state.thisWeekEvents.prefix(8))) { event in
                         HomeEventRow(
                             event: event,
                             courseName: store.courseName(for: event.courseID)
                         )
-                        if event.id != thisWeekEvents.prefix(8).last?.id {
+                        if event.id != state.thisWeekEvents.prefix(8).last?.id {
                             Divider().padding(.leading, 32)
                         }
                     }
                 }
             }
 
-            if !laterEvents.isEmpty {
+            if !state.laterEvents.isEmpty {
                 HomeSection(
                     title: "Later",
-                    subtitle: "\(laterEvents.count) item\(laterEvents.count == 1 ? "" : "s") beyond this week",
+                    subtitle: "\(state.laterEvents.count) item\(state.laterEvents.count == 1 ? "" : "s") beyond this week",
                     accentColor: .secondary
                 ) {
-                    ForEach(Array(laterEvents.prefix(6))) { event in
+                    ForEach(Array(state.laterEvents.prefix(6))) { event in
                         HomeEventRow(
                             event: event,
                             courseName: store.courseName(for: event.courseID)
                         )
-                        if event.id != laterEvents.prefix(6).last?.id {
+                        if event.id != state.laterEvents.prefix(6).last?.id {
                             Divider().padding(.leading, 32)
                         }
                     }
                 }
             }
         }
-    }
-
-    private static func priorityID(for submission: MissingSubmission) -> String {
-        "missing-\(submission.id)"
-    }
-
-    private static func priorityID(for event: UpcomingEvent) -> String {
-        "event-\(event.id)"
     }
 
 }
