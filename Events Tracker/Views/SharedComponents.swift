@@ -68,13 +68,39 @@ enum DisplayFormatters {
 struct SetupPromptView: View {
     let title: String
     let message: String
+    var systemImage: String = "link.badge.plus"
+    var tint: Color = .accentColor
 
     var body: some View {
-        ContentUnavailableView(
-            title,
-            systemImage: "link.badge.plus",
-            description: Text(message)
-        )
+        VStack(spacing: 18) {
+            ZStack {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [tint.opacity(0.22), tint.opacity(0.08)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 96, height: 96)
+
+                Image(systemName: systemImage)
+                    .font(.system(size: 38, weight: .medium))
+                    .foregroundStyle(tint)
+            }
+
+            VStack(spacing: 6) {
+                Text(title)
+                    .font(.title2.weight(.semibold))
+
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 460)
+            }
+        }
+        .padding(36)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
@@ -87,24 +113,13 @@ struct SummaryCard: View {
     let tint: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                Image(systemName: systemImage)
-                    .foregroundStyle(tint)
-                    .font(.subheadline)
-                Text(title)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            Text(value)
-                .font(.system(size: 24, weight: .semibold, design: .rounded))
-                .foregroundStyle(.primary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(Color.primary.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        MetricCard(
+            title: title,
+            value: value,
+            detail: detail,
+            systemImage: systemImage,
+            tint: tint
+        )
     }
 }
 
@@ -114,12 +129,20 @@ struct PillBadge: View {
 
     var body: some View {
         Text(text)
-            .font(.caption.weight(.semibold))
-            .padding(.horizontal, 8)
+            .font(.caption2.weight(.semibold))
+            .textCase(.uppercase)
+            .kerning(0.4)
+            .padding(.horizontal, 9)
             .padding(.vertical, 4)
-            .background(tint.opacity(0.12))
+            .background(
+                Capsule()
+                    .fill(tint.opacity(0.15))
+            )
+            .overlay(
+                Capsule()
+                    .strokeBorder(tint.opacity(0.25), lineWidth: 0.5)
+            )
             .foregroundStyle(tint)
-            .clipShape(Capsule())
     }
 }
 
@@ -307,9 +330,7 @@ struct CourseModuleCard: View {
                 }
             }
         }
-        .padding(18)
-        .background(Color.primary.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .appCard()
     }
 }
 
@@ -539,10 +560,10 @@ struct AssignmentDetailView: View {
                 }
 
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 12) {
-                    AssignmentDetailMetric(title: "Due", value: DisplayFormatters.formatted(date: assignment.dueAt), systemImage: "clock")
-                    AssignmentDetailMetric(title: "Points", value: assignment.pointsDescription.map { "\($0) pts" } ?? "No points", systemImage: "number")
-                    AssignmentDetailMetric(title: "Score", value: assignment.scoreDescription ?? "Not scored", systemImage: "checkmark.seal")
-                    AssignmentDetailMetric(title: "Grade", value: assignment.gradeDescription ?? "Not graded", systemImage: "graduationcap")
+                    AssignmentDetailMetric(title: "Due", value: DisplayFormatters.formatted(date: assignment.dueAt), systemImage: "clock", tint: .blue)
+                    AssignmentDetailMetric(title: "Points", value: assignment.pointsDescription.map { "\($0) pts" } ?? "No points", systemImage: "number", tint: .purple)
+                    AssignmentDetailMetric(title: "Score", value: assignment.scoreDescription ?? "Not scored", systemImage: "checkmark.seal", tint: .green)
+                    AssignmentDetailMetric(title: "Grade", value: assignment.gradeDescription ?? "Not graded", systemImage: "graduationcap", tint: .orange)
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
@@ -588,20 +609,27 @@ private struct AssignmentDetailMetric: View {
     let title: String
     let value: String
     let systemImage: String
+    let tint: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: systemImage)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        HStack(alignment: .top, spacing: 12) {
+            IconBadge(systemImage: systemImage, tint: tint, size: 32)
 
-            Text(value)
-                .font(.headline)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                    .kerning(0.5)
+
+                Text(value)
+                    .font(.headline)
+            }
+
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(Color.primary.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .appCard(padding: 14)
     }
 }
 
