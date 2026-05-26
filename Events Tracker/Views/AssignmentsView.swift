@@ -44,6 +44,14 @@ struct AssignmentsView: View {
         !store.loadingCourseAssignmentIDs.isEmpty
     }
 
+    private var subtitleText: String {
+        if isLoading {
+            return "Loading the latest assignment data…"
+        }
+
+        return "\(overdueAssignments.count) overdue · \(upcomingAssignments.count) upcoming"
+    }
+
     var body: some View {
         if !store.isConfigured {
             SetupPromptView(
@@ -57,102 +65,108 @@ struct AssignmentsView: View {
             )
         } else {
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    // Header
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Assignments")
-                            .font(.largeTitle.weight(.semibold))
-
-                        Group {
-                            if isLoading {
-                                HStack(spacing: 6) {
-                                    ProgressView().scaleEffect(0.65)
-                                    Text("Loading…")
-                                }
-                            } else {
-                                Text("\(overdueAssignments.count) overdue · \(upcomingAssignments.count) upcoming")
-                            }
-                        }
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 24) {
+                    ScreenHeader(
+                        title: "Assignments",
+                        subtitle: subtitleText
+                    ) {
+                        EmptyView()
                     }
-                    .padding(.bottom, 20)
 
-                    // Filter pills
-                    HStack(spacing: 4) {
-                        ForEach(AssignmentFilter.allCases) { option in
-                            Button {
-                                filter = option
-                            } label: {
-                                Text(option.rawValue)
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.flexible(), spacing: 12),
+                            GridItem(.flexible(), spacing: 12),
+                            GridItem(.flexible(), spacing: 12)
+                        ],
+                        spacing: 12
+                    ) {
+                        MetricCard(
+                            title: "Overdue",
+                            value: "\(overdueAssignments.count)",
+                            detail: overdueAssignments.isEmpty ? "Nothing overdue" : "Needs attention",
+                            systemImage: "exclamationmark.circle",
+                            tint: overdueAssignments.isEmpty ? .green : .red
+                        )
+
+                        MetricCard(
+                            title: "Upcoming",
+                            value: "\(upcomingAssignments.count)",
+                            detail: upcomingAssignments.isEmpty ? "All clear ahead" : "Plan ahead",
+                            systemImage: "calendar.badge.clock",
+                            tint: .orange
+                        )
+
+                        MetricCard(
+                            title: "Courses",
+                            value: "\(store.courses.count)",
+                            detail: "Tracked in this account",
+                            systemImage: "books.vertical",
+                            tint: .blue
+                        )
+                    }
+
+                    AssignmentFilterBar(filter: $filter)
+
+                    VStack(alignment: .leading, spacing: 18) {
+                        // Overdue section
+                        if filter == .all || filter == .missing {
+                            if !overdueAssignments.isEmpty {
+                                AssignmentSection(title: "OVERDUE", accentColor: .red, count: overdueAssignments.count) {
+                                    ForEach(overdueAssignments) { assignment in
+                                        AssignmentRow(
+                                            assignment: assignment,
+                                            courseName: store.courseName(for: assignment.courseID)
+                                        )
+                                        if assignment.id != overdueAssignments.last?.id {
+                                            Divider().padding(.leading, 32)
+                                        }
+                                    }
+                                }
+                            } else if filter == .missing {
+                                Text("Nothing overdue.")
                                     .font(.subheadline)
-                                    .fontWeight(filter == option ? .medium : .regular)
-                                    .foregroundStyle(filter == option ? Color.primary : Color.secondary)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 5)
-                                    .background(filter == option ? Color.primary.opacity(0.07) : Color.clear)
-                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                    .foregroundStyle(.secondary)
                             }
-                            .buttonStyle(.plain)
                         }
-                    }
-                    .padding(.bottom, 24)
 
-                    // Overdue section
-                    if filter == .all || filter == .missing {
-                        if !overdueAssignments.isEmpty {
-                            AssignmentSection(title: "OVERDUE", accentColor: .red, count: overdueAssignments.count) {
-                                ForEach(overdueAssignments) { assignment in
-                                    AssignmentRow(
-                                        assignment: assignment,
-                                        courseName: store.courseName(for: assignment.courseID)
-                                    )
-                                    if assignment.id != overdueAssignments.last?.id {
-                                        Divider().padding(.leading, 32)
+                        // Upcoming section
+                        if filter == .all || filter == .upcoming {
+                            if !upcomingAssignments.isEmpty {
+                                AssignmentSection(title: "UPCOMING", accentColor: .orange, count: upcomingAssignments.count) {
+                                    ForEach(upcomingAssignments) { assignment in
+                                        AssignmentRow(
+                                            assignment: assignment,
+                                            courseName: store.courseName(for: assignment.courseID)
+                                        )
+                                        if assignment.id != upcomingAssignments.last?.id {
+                                            Divider().padding(.leading, 32)
+                                        }
                                     }
                                 }
+                            } else if filter == .upcoming {
+                                Text("No upcoming assignments.")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
                             }
-                            .padding(.bottom, 28)
-                        } else if filter == .missing {
-                            Text("Nothing overdue.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
                         }
-                    }
 
-                    // Upcoming section
-                    if filter == .all || filter == .upcoming {
-                        if !upcomingAssignments.isEmpty {
-                            AssignmentSection(title: "UPCOMING", accentColor: .orange, count: upcomingAssignments.count) {
-                                ForEach(upcomingAssignments) { assignment in
-                                    AssignmentRow(
-                                        assignment: assignment,
-                                        courseName: store.courseName(for: assignment.courseID)
-                                    )
-                                    if assignment.id != upcomingAssignments.last?.id {
-                                        Divider().padding(.leading, 32)
-                                    }
+                        // All caught up
+                        if filter == .all && overdueAssignments.isEmpty && upcomingAssignments.isEmpty && !isLoading {
+                            VStack(spacing: 12) {
+                                IconBadge(systemImage: "checkmark.seal.fill", tint: .green, size: 56, cornerRadius: 14)
+
+                                VStack(spacing: 4) {
+                                    Text("All caught up")
+                                        .font(.title3.weight(.semibold))
+                                    Text("No unfinished assignments found.")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
                                 }
                             }
-                        } else if filter == .upcoming {
-                            Text("No upcoming assignments.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 32)
                         }
-                    }
-
-                    // All caught up
-                    if filter == .all && overdueAssignments.isEmpty && upcomingAssignments.isEmpty && !isLoading {
-                        VStack(spacing: 6) {
-                            Text("All caught up")
-                                .font(.headline)
-                                .foregroundStyle(.secondary)
-                            Text("No unfinished assignments found.")
-                                .font(.subheadline)
-                                .foregroundStyle(.tertiary)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 48)
                     }
                 }
                 .padding(24)
@@ -162,6 +176,40 @@ struct AssignmentsView: View {
                     await store.loadAssignmentsIfNeeded(for: course.id)
                 }
             }
+        }
+    }
+}
+
+private struct AssignmentFilterBar: View {
+    @Binding var filter: AssignmentFilter
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(AssignmentFilter.allCases) { option in
+                Button {
+                    filter = option
+                } label: {
+                    Text(option.rawValue)
+                        .font(.subheadline.weight(filter == option ? .semibold : .regular))
+                        .foregroundStyle(filter == option ? Color.accentColor : Color.secondary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background(
+                            Capsule()
+                                .fill(filter == option ? Color.accentColor.opacity(0.14) : Color.clear)
+                        )
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(
+                                    filter == option ? Color.accentColor.opacity(0.25) : Color.cardBorder,
+                                    lineWidth: 1
+                                )
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+
+            Spacer()
         }
     }
 }
@@ -180,20 +228,31 @@ private struct AssignmentSection<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 Circle()
                     .fill(accentColor)
-                    .frame(width: 6, height: 6)
+                    .frame(width: 8, height: 8)
                 Text(title)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                    .kerning(0.3)
-                Text("(\(count))")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .kerning(0.6)
+                Text("\(count)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(accentColor)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule()
+                            .fill(accentColor.opacity(0.15))
+                    )
+                Spacer()
             }
-            content
+
+            VStack(alignment: .leading, spacing: 0) {
+                content
+            }
+            .appCard(padding: 14)
         }
     }
 }

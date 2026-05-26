@@ -56,18 +56,10 @@ struct InboxView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Inbox")
-                            .font(.largeTitle.weight(.semibold))
-
-                        Text("Review and lightly manage Canvas conversations without leaving the app.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Spacer()
-
+                ScreenHeader(
+                    title: "Inbox",
+                    subtitle: "Review and lightly manage Canvas conversations without leaving the app."
+                ) {
                     Button {
                         Task {
                             await store.refreshInboxConversations()
@@ -75,10 +67,12 @@ struct InboxView: View {
                     } label: {
                         if store.loadingInbox {
                             ProgressView()
+                                .controlSize(.small)
                         } else {
                             Label("Refresh", systemImage: "arrow.clockwise")
                         }
                     }
+                    .buttonStyle(.bordered)
                     .disabled(!store.isConfigured || store.loadingInbox)
                 }
 
@@ -119,9 +113,7 @@ struct InboxView: View {
                             }
                         }
                     }
-                    .padding(16)
-                    .background(Color.primary.opacity(0.04))
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .appCard(padding: 16)
                 }
             }
             .padding(24)

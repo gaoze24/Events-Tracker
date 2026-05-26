@@ -417,9 +417,7 @@ private struct CoursePersonDetailMetric: View {
                 .textSelection(.enabled)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(Color.primary.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .appCard(padding: 14)
     }
 }
 

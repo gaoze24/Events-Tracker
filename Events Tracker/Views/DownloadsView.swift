@@ -57,21 +57,14 @@ struct DownloadsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Downloads")
-                            .font(.largeTitle.weight(.semibold))
-
-                        Text("Files you have seen or downloaded from loaded Canvas course folders.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Spacer()
-
+                ScreenHeader(
+                    title: "Downloads",
+                    subtitle: "Files you have seen or downloaded from loaded Canvas course folders."
+                ) {
                     Button("Clear Downloaded Files", role: .destructive) {
                         store.clearDownloadedFiles()
                     }
+                    .buttonStyle(.bordered)
                     .disabled(store.fileDownloadSnapshot.downloadedRecords.isEmpty)
                 }
 
@@ -113,9 +106,7 @@ struct DownloadsView: View {
                             }
                         }
                     }
-                    .padding(16)
-                    .background(Color.primary.opacity(0.04))
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .appCard(padding: 16)
                 }
             }
             .padding(24)

@@ -29,18 +29,10 @@ struct SyncCenterView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Sync Center")
-                    .font(.largeTitle.weight(.semibold))
-
-                Text("Review local cache health, prepare course metadata for offline use, and clear local data selectively.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
+        ScreenHeader(
+            title: "Sync Center",
+            subtitle: "Review local cache health, prepare course metadata for offline use, and clear local data selectively."
+        ) {
             Button {
                 Task {
                     await store.refresh()
@@ -48,10 +40,12 @@ struct SyncCenterView: View {
             } label: {
                 if store.isSyncing {
                     ProgressView()
+                        .controlSize(.small)
                 } else {
                     Label("Sync Dashboard", systemImage: "arrow.clockwise")
                 }
             }
+            .buttonStyle(.bordered)
             .disabled(!store.isConfigured || store.isSyncing)
         }
     }
@@ -183,9 +177,7 @@ struct SyncCenterView: View {
                         }
                     }
                 }
-                .padding(16)
-                .background(Color.primary.opacity(0.04))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .appCard(padding: 16)
             }
         }
     }
@@ -418,9 +410,7 @@ private struct OfflineDownloadPlannerView: View {
                 }
             }
         }
-        .padding(16)
-        .background(Color.primary.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .appCard(padding: 16)
     }
 
     private func loadMetadata() async {
@@ -455,29 +445,13 @@ private struct OfflinePlannerSummaryCard: View {
     let tint: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: systemImage)
-                    .foregroundStyle(tint)
-                    .font(.subheadline)
-
-                Text(title)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            Text(value)
-                .font(.system(size: 24, weight: .semibold, design: .rounded))
-                .foregroundStyle(.primary)
-
-            Text(detail)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(Color.primary.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        MetricCard(
+            title: title,
+            value: value,
+            detail: detail,
+            systemImage: systemImage,
+            tint: tint
+        )
     }
 }
 

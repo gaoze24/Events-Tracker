@@ -57,14 +57,10 @@ struct GlobalSearchView: View {
 
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Search")
-                        .font(.largeTitle.weight(.semibold))
-
-                    Text("Searches data already synced or loaded in this app, including courses, assignments, modules, files, announcements, people, and cached detail pages.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
+                ScreenHeader(
+                    title: "Search",
+                    subtitle: "Searches data already synced or loaded in this app, including courses, assignments, modules, files, announcements, people, and cached detail pages."
+                )
 
                 searchControls
 
@@ -73,17 +69,19 @@ struct GlobalSearchView: View {
                 } else if displayState.visibleResults.isEmpty {
                     SetupPromptView(
                         title: "No Matching Results",
-                        message: "Try another term or load more course sections first. Search only covers currently synced and cached data."
+                        message: "Try another term or load more course sections first. Search only covers currently synced and cached data.",
+                        systemImage: "magnifyingglass",
+                        tint: .indigo
                     )
                 } else {
                     VStack(alignment: .leading, spacing: 18) {
                         Text(displayState.resultCountLabel)
-                            .font(.headline)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
 
                         if !displayState.topResults.isEmpty {
                             VStack(alignment: .leading, spacing: 10) {
-                                Text("Top Results")
-                                    .font(.headline)
+                                SectionHeader(title: "Top Results", systemImage: "sparkles", tint: .indigo)
 
                                 resultSection(displayState.topResults)
                             }
@@ -91,8 +89,7 @@ struct GlobalSearchView: View {
 
                         ForEach(displayState.groupedResults, id: \.0) { kind, results in
                             VStack(alignment: .leading, spacing: 10) {
-                                Label(kind.rawValue, systemImage: kind.systemImage)
-                                    .font(.headline)
+                                SectionHeader(title: kind.rawValue, systemImage: kind.systemImage, tint: .blue)
 
                                 resultSection(results)
                             }
@@ -144,35 +141,42 @@ struct GlobalSearchView: View {
                 }
             }
         }
-        .padding(14)
-        .background(Color.primary.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .appCard(padding: 14)
     }
 
     private var recentSearches: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Recent Searches")
-                    .font(.headline)
-
-                Spacer()
+                SectionHeader(title: "Recent Searches", systemImage: "clock.arrow.circlepath", tint: .indigo)
 
                 Button("Clear") {
                     store.clearRecentSearchTerms()
                 }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
                 .disabled(store.recentSearchTerms.isEmpty)
             }
 
             if store.recentSearchTerms.isEmpty {
                 SetupPromptView(
                     title: "Start Searching",
-                    message: "Search for a course, assignment, module item, file, announcement, person, or cached detail page."
+                    message: "Search for a course, assignment, module item, file, announcement, person, or cached detail page.",
+                    systemImage: "magnifyingglass",
+                    tint: .indigo
                 )
             } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 8)], alignment: .leading, spacing: 8) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 8)], alignment: .leading, spacing: 8) {
                     ForEach(store.recentSearchTerms, id: \.self) { term in
-                        Button(term) {
+                        Button {
                             query = term
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "clock")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                Text(term)
+                                    .lineLimit(1)
+                            }
                         }
                         .buttonStyle(.bordered)
                     }

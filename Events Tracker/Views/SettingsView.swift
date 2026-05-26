@@ -71,8 +71,10 @@ struct SettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                Text("Settings")
-                    .font(.largeTitle.weight(.semibold))
+                ScreenHeader(
+                    title: "Settings",
+                    subtitle: "Connect your Canvas account, configure reminders, and manage local data."
+                )
 
                 Form {
                     Section("Canvas Connection") {

@@ -102,31 +102,28 @@ struct EventsView: View {
                 Divider()
 
                 VStack(alignment: .leading, spacing: 16) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(selectedCourseTitle)
-                                .font(.largeTitle.weight(.semibold))
-
-                            Text("\(filteredUpcomingEvents.count) upcoming · \(filteredMissingSubmissions.count) missing")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer()
-
-                        Button("Today") {
-                            selectedDate = Date()
-                            visibleMonth = Date()
-                        }
-
-                        Picker("View", selection: $displayMode) {
-                            ForEach(EventsDisplayMode.allCases) { item in
-                                Text(item.rawValue)
-                                    .tag(item)
+                    ScreenHeader(
+                        title: selectedCourseTitle,
+                        subtitle: "\(filteredUpcomingEvents.count) upcoming · \(filteredMissingSubmissions.count) missing"
+                    ) {
+                        HStack(spacing: 10) {
+                            Button {
+                                selectedDate = Date()
+                                visibleMonth = Date()
+                            } label: {
+                                Label("Today", systemImage: "scope")
                             }
+                            .buttonStyle(.bordered)
+
+                            Picker("View", selection: $displayMode) {
+                                ForEach(EventsDisplayMode.allCases) { item in
+                                    Text(item.rawValue)
+                                        .tag(item)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(width: 280)
                         }
-                        .pickerStyle(.segmented)
-                        .frame(width: 320)
                     }
 
                     if calendarItems.isEmpty {
@@ -207,9 +204,17 @@ struct EventsView: View {
                 }
                 .frame(minWidth: 520)
 
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(selectedDate.formatted(.dateTime.weekday(.wide).month().day()))
-                            .font(.largeTitle.weight(.semibold))
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(selectedDate.formatted(.dateTime.weekday(.wide)))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .textCase(.uppercase)
+                            .kerning(0.6)
+
+                        Text(selectedDate.formatted(.dateTime.month().day()))
+                            .font(.system(size: 28, weight: .semibold, design: .rounded))
+                    }
 
                     EventItemsPanel(
                         title: "Selected Day",
@@ -228,9 +233,7 @@ struct EventsView: View {
                     }
                 }
                 .frame(width: 340, alignment: .topLeading)
-                .padding(16)
-                .background(Color.primary.opacity(0.04))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .appCard(padding: 16)
             }
         }
     }
@@ -275,9 +278,8 @@ struct EventsView: View {
         let groupedItems = CalendarEventItem.groupByDay(calendarItems, calendar: calendar)
         let sortedDays = groupedItems.keys.sorted()
 
-        return VStack(alignment: .leading, spacing: 16) {
-            Text("Agenda")
-                .font(.title2.weight(.semibold))
+        return VStack(alignment: .leading, spacing: 18) {
+            SectionHeader(title: "Agenda", systemImage: "list.bullet.rectangle", tint: .accentColor)
 
             if !undatedItems.isEmpty {
                 EventItemsPanel(
@@ -286,18 +288,18 @@ struct EventsView: View {
                     items: undatedItems,
                     courseName: store.courseName(for:)
                 )
-                .padding(16)
-                .background(Color.orange.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .tintedCard(.orange, padding: 16)
             }
 
             if sortedDays.isEmpty {
                 SetupPromptView(
                     title: "No Dated Items",
-                    message: "The current Canvas items do not have dates to place on the agenda."
+                    message: "The current Canvas items do not have dates to place on the agenda.",
+                    systemImage: "calendar.badge.exclamationmark",
+                    tint: .orange
                 )
             } else {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 12) {
                     ForEach(sortedDays, id: \.self) { day in
                         EventItemsPanel(
                             title: day.formatted(.dateTime.weekday(.wide).month().day()),
@@ -305,6 +307,7 @@ struct EventsView: View {
                             items: groupedItems[day] ?? [],
                             courseName: store.courseName(for:)
                         )
+                        .appCard(padding: 14)
                     }
                 }
             }
@@ -364,18 +367,17 @@ private struct CalendarDayCell: View {
     var body: some View {
         Button(action: onSelect) {
             VStack(alignment: .leading, spacing: 8) {
-                HStack {
+                HStack(alignment: .center) {
                     Text(day.formatted(.dateTime.day()))
-                        .font(.headline)
-                        .foregroundStyle(isInVisibleMonth ? .primary : .secondary)
+                        .font(.system(size: 15, weight: isToday ? .bold : .semibold, design: .rounded))
+                        .foregroundStyle(dayNumberStyle)
+                        .frame(width: 26, height: 26)
+                        .background(
+                            Circle()
+                                .fill(isToday ? Color.accentColor : Color.clear)
+                        )
 
                     Spacer()
-
-                    if isToday {
-                        Circle()
-                            .fill(Color.accentColor)
-                            .frame(width: 6, height: 6)
-                    }
                 }
 
                 HStack(spacing: 4) {
@@ -387,7 +389,7 @@ private struct CalendarDayCell: View {
 
                     if items.count > 4 {
                         Text("+\(items.count - 4)")
-                            .font(.caption2)
+                            .font(.caption2.weight(.semibold))
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -403,22 +405,40 @@ private struct CalendarDayCell: View {
             .padding(10)
             .frame(minHeight: 92, alignment: .topLeading)
             .frame(maxWidth: .infinity)
-            .background(background)
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(isSelected ? Color.accentColor : Color.primary.opacity(0.08), lineWidth: isSelected ? 2 : 1)
+            .background(
+                RoundedRectangle(cornerRadius: AppTheme.smallCornerRadius, style: .continuous)
+                    .fill(background)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: AppTheme.smallCornerRadius, style: .continuous)
+                    .strokeBorder(borderColor, lineWidth: isSelected ? 1.5 : 1)
+            )
         }
         .buttonStyle(.plain)
     }
 
-    private var background: Color {
-        if isSelected {
-            return Color.accentColor.opacity(0.12)
+    private var dayNumberStyle: Color {
+        if isToday {
+            return .white
         }
 
-        return isInVisibleMonth ? Color.primary.opacity(0.04) : Color.primary.opacity(0.02)
+        return isInVisibleMonth ? .primary : .secondary
+    }
+
+    private var background: Color {
+        if isSelected {
+            return Color.accentColor.opacity(0.14)
+        }
+
+        return isInVisibleMonth ? Color.cardBackground : Color.subtleBackground
+    }
+
+    private var borderColor: Color {
+        if isSelected {
+            return Color.accentColor.opacity(0.65)
+        }
+
+        return Color.cardBorder
     }
 }
 
@@ -429,14 +449,29 @@ private struct WeekDayColumn: View {
     let courseName: (Int?) -> String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(day.formatted(.dateTime.weekday(.abbreviated)))
-                    .font(.headline)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(day.formatted(.dateTime.weekday(.abbreviated)))
+                        .font(.caption.weight(.semibold))
+                        .textCase(.uppercase)
+                        .kerning(0.5)
+                        .foregroundStyle(isToday ? Color.accentColor : Color.secondary)
 
-                Text(day.formatted(.dateTime.month().day()))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    Text(day.formatted(.dateTime.month().day()))
+                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+                }
+
+                Spacer()
+
+                if isToday {
+                    Text("Today")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.accentColor.opacity(0.18)))
+                        .foregroundStyle(Color.accentColor)
+                }
             }
 
             if items.isEmpty {
@@ -453,10 +488,16 @@ private struct WeekDayColumn: View {
 
             Spacer(minLength: 0)
         }
-        .padding(12)
+        .padding(14)
         .frame(maxWidth: .infinity, minHeight: 260, alignment: .topLeading)
-        .background(isToday ? Color.accentColor.opacity(0.08) : Color.primary.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: AppTheme.smallCornerRadius, style: .continuous)
+                .fill(isToday ? Color.accentColor.opacity(0.10) : Color.cardBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: AppTheme.smallCornerRadius, style: .continuous)
+                .strokeBorder(isToday ? Color.accentColor.opacity(0.35) : Color.cardBorder, lineWidth: 1)
+        )
     }
 }
 

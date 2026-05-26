@@ -1159,9 +1159,7 @@ private struct CourseSyllabusContent: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(16)
-            .background(Color.primary.opacity(0.04))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .appCard(padding: 16)
         } else {
             SetupPromptView(
                 title: "No Syllabus Yet",
@@ -1353,9 +1351,7 @@ private struct CourseFilesContent: View {
                     }
                 }
                 .frame(width: 280, alignment: .topLeading)
-                .padding(14)
-                .background(Color.primary.opacity(0.04))
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .appCard(padding: 14)
 
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
@@ -1413,9 +1409,7 @@ private struct CourseFilesContent: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(16)
-                .background(Color.primary.opacity(0.04))
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .appCard(padding: 16)
             }
         }
     }
@@ -1476,8 +1470,14 @@ private struct CourseFolderRow: View {
                 Spacer(minLength: 0)
             }
             .padding(10)
-            .background(isSelected ? Color.blue.opacity(0.10) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(isSelected ? Color.accentColor.opacity(0.3) : Color.clear, lineWidth: 1)
+            )
         }
         .buttonStyle(.plain)
     }

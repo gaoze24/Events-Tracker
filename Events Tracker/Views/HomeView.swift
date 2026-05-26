@@ -80,7 +80,9 @@ struct HomeView: View {
         if !store.isConfigured {
             SetupPromptView(
                 title: "Connect Canvas",
-                message: "Save your Canvas base URL and personal access token in Settings, then sync to build your dashboard."
+                message: "Save your Canvas base URL and personal access token in Settings, then sync to build your dashboard.",
+                systemImage: "link.badge.plus",
+                tint: .blue
             )
         } else {
             let dashboardState = HomeDashboardDisplayState(
@@ -107,18 +109,10 @@ struct HomeView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Dashboard")
-                    .font(.largeTitle.weight(.semibold))
-
-                Text("Prioritized work for \(selectedCourseName.lowercased()).")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
+        ScreenHeader(
+            title: "Dashboard",
+            subtitle: "Prioritized work for \(selectedCourseName.lowercased())."
+        ) {
             Picker("Course", selection: selectedCourseBinding) {
                 Text("All Courses")
                     .tag(nil as Int?)
@@ -142,7 +136,7 @@ struct HomeView: View {
             ],
             spacing: 12
         ) {
-            HomeMetricCard(
+            MetricCard(
                 title: "Courses",
                 value: selectedCourseID == nil ? "\(store.courses.count)" : "1",
                 detail: selectedCourseName,
@@ -150,15 +144,15 @@ struct HomeView: View {
                 tint: .blue
             )
 
-            HomeMetricCard(
+            MetricCard(
                 title: "Overdue",
                 value: "\(state.prioritizedMissingSubmissions.count)",
                 detail: state.prioritizedMissingSubmissions.isEmpty ? "No missing work" : "Needs attention",
                 systemImage: "exclamationmark.circle",
-                tint: state.prioritizedMissingSubmissions.isEmpty ? .secondary : .red
+                tint: state.prioritizedMissingSubmissions.isEmpty ? .green : .red
             )
 
-            HomeMetricCard(
+            MetricCard(
                 title: "Today",
                 value: "\(state.todayEvents.count)",
                 detail: "Due or scheduled today",
@@ -166,7 +160,7 @@ struct HomeView: View {
                 tint: .orange
             )
 
-            HomeMetricCard(
+            MetricCard(
                 title: "This Week",
                 value: "\(state.thisWeekEvents.count)",
                 detail: "Next 7 days",
@@ -281,82 +275,74 @@ struct HomeView: View {
 
 }
 
-private struct HomeMetricCard: View {
-    let title: String
-    let value: String
-    let detail: String
-    let systemImage: String
-    let tint: Color
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                Image(systemName: systemImage)
-                    .foregroundStyle(tint)
-                Text(title)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            Text(value)
-                .font(.system(size: 28, weight: .semibold, design: .rounded))
-
-            Text(detail)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(Color.primary.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-}
-
 private struct HomeFocusCard: View {
     let item: CanvasStore.DashboardPriorityItem?
     let courseName: (Int?) -> String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: focusIcon)
-                    .foregroundStyle(focusTint)
-                Text("Focus")
-                    .font(.headline)
-                Spacer()
-                PillBadge(text: focusBadge, tint: focusTint)
-            }
+        HStack(alignment: .top, spacing: 18) {
+            IconBadge(systemImage: focusIcon, tint: focusTint, size: 48, cornerRadius: 12)
 
-            Text(focusTitle)
-                .font(.title3.weight(.semibold))
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text("Focus")
+                        .font(.caption.weight(.semibold))
+                        .textCase(.uppercase)
+                        .kerning(0.6)
+                        .foregroundStyle(.secondary)
 
-            Text(focusDetail)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                    PillBadge(text: focusBadge, tint: focusTint)
 
-            if let url = item?.actionableURL {
-                Link("Open in Canvas", destination: url)
+                    Spacer(minLength: 0)
+                }
+
+                Text(focusTitle)
+                    .font(.title2.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text(focusDetail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                if let url = item?.actionableURL {
+                    Link(destination: url) {
+                        HStack(spacing: 4) {
+                            Text("Open in Canvas")
+                            Image(systemName: "arrow.up.forward")
+                                .font(.caption2.weight(.bold))
+                        }
+                    }
                     .font(.caption.weight(.semibold))
+                    .foregroundStyle(focusTint)
+                    .padding(.top, 2)
+                }
             }
+
+            Spacer(minLength: 0)
         }
-        .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(focusTint.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .tintedCard(focusTint, padding: 20)
     }
 
     private var focusIcon: String {
-        item?.isMissing == true ? "exclamationmark.triangle" : "sparkles"
+        guard let item else {
+            return "sparkles"
+        }
+
+        return item.isMissing ? "exclamationmark.triangle.fill" : "bolt.fill"
     }
 
     private var focusTint: Color {
-        item?.isMissing == true ? .red : .blue
+        guard let item else {
+            return .green
+        }
+
+        return item.isMissing ? .red : .blue
     }
 
     private var focusBadge: String {
         guard let item else {
-            return "Clear"
+            return "All clear"
         }
 
         return item.isMissing ? "Overdue" : "Next Up"
@@ -449,23 +435,12 @@ private struct HomeSection<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(accentColor)
-                    .frame(width: 8, height: 8)
-                Text(title)
-                    .font(.headline)
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            SectionHeader(title: title, subtitle: subtitle, tint: accentColor)
 
             VStack(alignment: .leading, spacing: 0) {
                 content
             }
-            .padding(14)
-            .background(Color.primary.opacity(0.04))
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .appCard(padding: 14)
         }
     }
 }
