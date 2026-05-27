@@ -14,18 +14,18 @@ private enum CoursePeopleFilter: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    func includes(_ person: CoursePerson) -> Bool {
+    func includes(_ entry: PersonEntry) -> Bool {
         switch self {
         case .all:
             return true
         case .teachers:
-            return person.primaryRole == .teacher
+            return entry.primaryRole == .teacher
         case .tas:
-            return person.primaryRole == .ta
+            return entry.primaryRole == .ta
         case .students:
-            return person.primaryRole == .student
+            return entry.primaryRole == .student
         case .others:
-            return ![.teacher, .ta, .student].contains(person.primaryRole)
+            return ![.teacher, .ta, .student].contains(entry.primaryRole)
         }
     }
 }
@@ -36,6 +36,48 @@ private enum CoursePeopleSort: String, CaseIterable, Identifiable {
     case activity = "Recent Activity"
 
     var id: String { rawValue }
+}
+
+// Lightweight wrapper that caches the expensive `primaryRole` lookup so it is
+// computed at most once per person per body invocation. `CoursePerson.primaryRole`
+// allocates several strings and runs multiple `.contains()` checks, which becomes
+// catastrophic when invoked across counting, filtering, sorting comparisons, and
+// row rendering for large rosters.
+fileprivate struct PersonEntry: Identifiable {
+    let person: CoursePerson
+    let primaryRole: CoursePersonRole
+    let roleLabel: String
+    let sectionLabel: String?
+    let lastActivityAt: Date?
+
+    init(person: CoursePerson) {
+        self.person = person
+        let primaryRole = person.primaryRole
+        self.primaryRole = primaryRole
+        self.roleLabel = primaryRole.label
+        self.sectionLabel = person.sectionLabel
+        self.lastActivityAt = person.lastActivityAt
+    }
+
+    var id: Int { person.id }
+
+    func matchesSearch(_ normalizedQuery: String) -> Bool {
+        guard !normalizedQuery.isEmpty else {
+            return true
+        }
+
+        return [
+            person.name,
+            person.sortableName,
+            person.shortName,
+            person.email,
+            person.loginID,
+            sectionLabel,
+            roleLabel
+        ].contains { value in
+            value?.normalizedPeopleSearchText.contains(normalizedQuery) == true
+        }
+    }
 }
 
 struct CoursePeopleContent: View {
@@ -53,39 +95,27 @@ struct CoursePeopleContent: View {
 
     private let summaryColumns = [
         GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12),
         GridItem(.flexible(), spacing: 12)
     ]
 
-    private var visiblePeople: [CoursePerson] {
-        let filteredPeople = people
-            .filter { filter.includes($0) }
-            .filter { $0.matchesSearch(searchQuery) }
-
-        switch sort {
-        case .role:
-            return filteredPeople.sorted(by: sortByRole)
-        case .name:
-            return filteredPeople.sorted(by: sortByName)
-        case .activity:
-            return filteredPeople.sorted(by: sortByActivity)
-        }
-    }
-
-    private var teacherAndTACount: Int {
-        people.filter { $0.primaryRole == .teacher || $0.primaryRole == .ta }.count
-    }
-
-    private var studentCount: Int {
-        people.filter { $0.primaryRole == .student }.count
-    }
-
-    private var otherCount: Int {
-        people.filter { ![.teacher, .ta, .student].contains($0.primaryRole) }.count
-    }
-
     var body: some View {
+        let preparedPeople = people.map { person in
+            PersonEntry(person: person)
+        }
+        let normalizedSearchQuery = searchQuery.normalizedPeopleSearchText
+        let teacherAndTACount = preparedPeople.reduce(into: 0) { count, entry in
+            if entry.primaryRole == .teacher || entry.primaryRole == .ta {
+                count += 1
+            }
+        }
+        let studentCount = preparedPeople.reduce(into: 0) { count, entry in
+            if entry.primaryRole == .student {
+                count += 1
+            }
+        }
+        let otherCount = preparedPeople.count - teacherAndTACount - studentCount
+        let visiblePeople = filteredAndSortedPeople(from: preparedPeople, normalizedSearchQuery: normalizedSearchQuery)
+
         HStack {
             Text("People")
                 .font(.title2.weight(.semibold))
@@ -137,7 +167,7 @@ struct CoursePeopleContent: View {
         HStack(spacing: 12) {
             TextField("Search people, roles, sections, or emails", text: $searchQuery)
                 .textFieldStyle(.roundedBorder)
-                .frame(minWidth: 260, idealWidth: 320, maxWidth: 420)
+                .frame(minWidth: 220, idealWidth: 260, maxWidth: 320)
 
             Picker("Filter", selection: $filter) {
                 ForEach(CoursePeopleFilter.allCases) { option in
@@ -146,7 +176,7 @@ struct CoursePeopleContent: View {
                 }
             }
             .pickerStyle(.menu)
-            .frame(width: 140)
+            .frame(width: 150)
 
             Picker("Sort", selection: $sort) {
                 ForEach(CoursePeopleSort.allCases) { option in
@@ -155,7 +185,7 @@ struct CoursePeopleContent: View {
                 }
             }
             .pickerStyle(.menu)
-            .frame(width: 170)
+            .frame(width: 150)
 
             Spacer()
 
@@ -182,15 +212,15 @@ struct CoursePeopleContent: View {
                     message: "Change the search, role filter, or sort controls to review more members."
                 )
             } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(visiblePeople) { person in
-                        CoursePersonRow(person: person)
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(visiblePeople) { entry in
+                        CoursePersonRow(entry: entry)
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                selectedPerson = person
+                                selectedPerson = entry.person
                             }
 
-                        if person.id != visiblePeople.last?.id {
+                        if entry.id != visiblePeople.last?.id {
                             Divider()
                         }
                     }
@@ -211,21 +241,39 @@ struct CoursePeopleContent: View {
         .onChange(of: sort) { _, _ in persistPreference() }
     }
 
-    private func sortByRole(_ lhs: CoursePerson, _ rhs: CoursePerson) -> Bool {
-        if lhs.primaryRole.sortPriority != rhs.primaryRole.sortPriority {
-            return lhs.primaryRole.sortPriority < rhs.primaryRole.sortPriority
+    private func filteredAndSortedPeople(from prepared: [PersonEntry], normalizedSearchQuery: String) -> [PersonEntry] {
+        let roleFiltered = prepared.filter { filter.includes($0) }
+        let filtered = normalizedSearchQuery.isEmpty
+            ? roleFiltered
+            : roleFiltered.filter { $0.matchesSearch(normalizedSearchQuery) }
+
+        switch sort {
+        case .role:
+            return filtered.sorted(by: sortByRole)
+        case .name:
+            return filtered.sorted(by: sortByName)
+        case .activity:
+            return filtered.sorted(by: sortByActivity)
+        }
+    }
+
+    private func sortByRole(_ lhs: PersonEntry, _ rhs: PersonEntry) -> Bool {
+        let leftPriority = lhs.primaryRole.sortPriority
+        let rightPriority = rhs.primaryRole.sortPriority
+        if leftPriority != rightPriority {
+            return leftPriority < rightPriority
         }
 
         return sortByName(lhs, rhs)
     }
 
-    private func sortByName(_ lhs: CoursePerson, _ rhs: CoursePerson) -> Bool {
-        let left = lhs.sortableName ?? lhs.name
-        let right = rhs.sortableName ?? rhs.name
+    private func sortByName(_ lhs: PersonEntry, _ rhs: PersonEntry) -> Bool {
+        let left = lhs.person.sortableName ?? lhs.person.name
+        let right = rhs.person.sortableName ?? rhs.person.name
         return left.localizedCaseInsensitiveCompare(right) == .orderedAscending
     }
 
-    private func sortByActivity(_ lhs: CoursePerson, _ rhs: CoursePerson) -> Bool {
+    private func sortByActivity(_ lhs: PersonEntry, _ rhs: PersonEntry) -> Bool {
         switch (lhs.lastActivityAt, rhs.lastActivityAt) {
         case let (left?, right?):
             if left != right {
@@ -254,7 +302,9 @@ struct CoursePeopleContent: View {
 }
 
 private struct CoursePersonRow: View {
-    let person: CoursePerson
+    let entry: PersonEntry
+
+    private var person: CoursePerson { entry.person }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -265,7 +315,7 @@ private struct CoursePersonRow: View {
                     Text(person.displayName)
                         .font(.headline)
 
-                    PillBadge(text: person.roleLabel, tint: tint)
+                    PillBadge(text: entry.roleLabel, tint: tint)
 
                     if let state = person.primaryEnrollment?.enrollmentState, !state.isEmpty {
                         PillBadge(text: state.capitalized, tint: .secondary)
@@ -273,7 +323,7 @@ private struct CoursePersonRow: View {
                 }
 
                 HStack(spacing: 12) {
-                    if let section = person.sectionLabel, !section.isEmpty {
+                    if let section = entry.sectionLabel, !section.isEmpty {
                         Label(section, systemImage: "rectangle.3.group")
                     }
 
@@ -281,7 +331,7 @@ private struct CoursePersonRow: View {
                         Label(email, systemImage: "envelope")
                     }
 
-                    if let lastActivity = person.lastActivityAt {
+                    if let lastActivity = entry.lastActivityAt {
                         Label(
                             DisplayFormatters.relativeString(date: lastActivity)
                                 ?? DisplayFormatters.formatted(date: lastActivity),
@@ -304,7 +354,7 @@ private struct CoursePersonRow: View {
     }
 
     private var tint: Color {
-        switch person.primaryRole {
+        switch entry.primaryRole {
         case .teacher:
             return .purple
         case .ta:
@@ -314,6 +364,14 @@ private struct CoursePersonRow: View {
         case .observer, .designer, .other:
             return .orange
         }
+    }
+}
+
+private extension String {
+    var normalizedPeopleSearchText: String {
+        trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
     }
 }
 
