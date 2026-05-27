@@ -16,6 +16,8 @@ struct QuickLookPreviewItem: Identifiable, Hashable {
 }
 
 struct QuickLookPreviewSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
     let item: QuickLookPreviewItem
 
     var body: some View {
@@ -26,6 +28,11 @@ struct QuickLookPreviewSheet: View {
                     .lineLimit(1)
 
                 Spacer()
+
+                Button("Close") {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
             }
             .padding()
 

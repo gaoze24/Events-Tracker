@@ -10,7 +10,6 @@ private enum DownloadStatusFilter: String, CaseIterable, Identifiable {
     case downloaded = "Downloaded"
     case downloading = "Downloading"
     case failed = "Failed"
-    case notDownloaded = "Not Downloaded"
 
     var id: String { rawValue }
 
@@ -24,8 +23,6 @@ private enum DownloadStatusFilter: String, CaseIterable, Identifiable {
             return record.state == .downloading
         case .failed:
             return record.state == .failed
-        case .notDownloaded:
-            return record.state == .notDownloaded
         }
     }
 }
@@ -38,12 +35,12 @@ struct DownloadsView: View {
     @State private var selectedType = "All"
     @State private var previewItem: QuickLookPreviewItem?
 
-    private var records: [FileDownloadRecord] {
-        store.fileDownloadSnapshot.records
+    private var managedRecords: [FileDownloadRecord] {
+        store.fileDownloadSnapshot.records.filter { isManaged($0) }
     }
 
     private var visibleRecords: [FileDownloadRecord] {
-        records
+        managedRecords
             .filter { statusFilter.includes($0) }
             .filter { selectedCourseID == nil || $0.courseID == selectedCourseID }
             .filter { selectedType == "All" || $0.typeLabel == selectedType }
@@ -51,7 +48,19 @@ struct DownloadsView: View {
     }
 
     private var typeOptions: [String] {
-        ["All"] + Array(Set(records.map(\.typeLabel))).sorted()
+        ["All"] + Array(Set(managedRecords.map(\.typeLabel))).sorted()
+    }
+
+    private var downloadedCount: Int {
+        managedRecords.filter { $0.state == .downloaded }.count
+    }
+
+    private var downloadingCount: Int {
+        managedRecords.filter { $0.state == .downloading }.count
+    }
+
+    private var failedCount: Int {
+        managedRecords.filter { $0.state == .failed }.count
     }
 
     var body: some View {
@@ -59,7 +68,7 @@ struct DownloadsView: View {
             VStack(alignment: .leading, spacing: 24) {
                 ScreenHeader(
                     title: "Downloads",
-                    subtitle: "Files you have seen or downloaded from loaded Canvas course folders."
+                    subtitle: "Files you have downloaded from Canvas, plus any in-progress or failed downloads."
                 ) {
                     Button("Clear Downloaded Files", role: .destructive) {
                         store.clearDownloadedFiles()
@@ -69,9 +78,27 @@ struct DownloadsView: View {
                 }
 
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
-                    SummaryCard(title: "Known Files", value: "\(records.count)", detail: "Files seen while browsing courses.", systemImage: "doc", tint: .blue)
-                    SummaryCard(title: "Downloaded", value: "\(records.filter { $0.state == .downloaded }.count)", detail: "Available locally.", systemImage: "arrow.down.circle", tint: .green)
-                    SummaryCard(title: "Failed", value: "\(records.filter { $0.state == .failed }.count)", detail: "Downloads that need attention.", systemImage: "exclamationmark.triangle", tint: .red)
+                    SummaryCard(
+                        title: "Downloaded",
+                        value: "\(downloadedCount)",
+                        detail: "Available locally.",
+                        systemImage: "arrow.down.circle",
+                        tint: .green
+                    )
+                    SummaryCard(
+                        title: "Downloading",
+                        value: "\(downloadingCount)",
+                        detail: "Currently in progress.",
+                        systemImage: "arrow.down.doc",
+                        tint: .blue
+                    )
+                    SummaryCard(
+                        title: "Failed",
+                        value: "\(failedCount)",
+                        detail: "Downloads that need attention.",
+                        systemImage: "exclamationmark.triangle",
+                        tint: .red
+                    )
                     SummaryCard(
                         title: "Storage",
                         value: ByteCountFormatter.string(
@@ -86,10 +113,10 @@ struct DownloadsView: View {
 
                 controls
 
-                if records.isEmpty {
+                if managedRecords.isEmpty {
                     SetupPromptView(
-                        title: "No Files Seen Yet",
-                        message: "Open a course Files tab to load Canvas folders and files. Downloads will appear here after that."
+                        title: "No Downloads Yet",
+                        message: "Files you download will appear here. Use Sync Center to plan downloads."
                     )
                 } else if visibleRecords.isEmpty {
                     SetupPromptView(
@@ -160,6 +187,15 @@ struct DownloadsView: View {
 
         previewItem = QuickLookPreviewItem(url: url, title: record.file.name)
     }
+
+    private func isManaged(_ record: FileDownloadRecord) -> Bool {
+        switch record.state {
+        case .downloaded, .downloading, .failed:
+            return true
+        case .notDownloaded:
+            return false
+        }
+    }
 }
 
 private struct DownloadRecordRow: View {
@@ -204,7 +240,7 @@ private struct DownloadRecordRow: View {
 
             Spacer()
 
-            DownloadActions(record: record, onPreview: onPreview)
+            DownloadsPageActions(record: record, onPreview: onPreview)
         }
         .padding(.vertical, 10)
     }
@@ -219,6 +255,57 @@ private struct DownloadRecordRow: View {
             return .red
         case .notDownloaded:
             return .secondary
+        }
+    }
+}
+
+private struct DownloadsPageActions: View {
+    @EnvironmentObject private var store: CanvasStore
+
+    let record: FileDownloadRecord
+    let onPreview: (FileDownloadRecord) -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            switch record.state {
+            case .downloaded:
+                Button("Preview") {
+                    onPreview(record)
+                }
+                .font(.caption.weight(.semibold))
+
+                Button("Open") {
+                    store.openDownloadedFile(record)
+                }
+                .font(.caption.weight(.semibold))
+
+                Button("Reveal") {
+                    store.revealDownloadedFile(record)
+                }
+                .font(.caption.weight(.semibold))
+
+                Button("Remove", role: .destructive) {
+                    store.removeDownloadedFile(record)
+                }
+                .font(.caption.weight(.semibold))
+            case .downloading:
+                ProgressView()
+                    .controlSize(.small)
+            case .failed:
+                Button("Retry") {
+                    Task {
+                        await store.retryDownload(record)
+                    }
+                }
+                .font(.caption.weight(.semibold))
+            case .notDownloaded:
+                EmptyView()
+            }
+
+            if let url = record.file.actionableURL {
+                Link("Canvas", destination: url)
+                    .font(.caption.weight(.semibold))
+            }
         }
     }
 }
