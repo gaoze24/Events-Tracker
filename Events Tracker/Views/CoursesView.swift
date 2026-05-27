@@ -5,6 +5,7 @@
 //  Created by Codex on 13/4/26.
 //
 
+import AppKit
 import SwiftUI
 
 private enum CourseWorkspaceSection: String, CaseIterable, Identifiable {
@@ -943,6 +944,8 @@ private struct CourseAnnouncementsContent: View {
     @Binding var filter: CourseAnnouncementFilter
     @Binding var sort: CourseAnnouncementSort
 
+    @State private var selectedAnnouncement: CourseAnnouncement?
+
     private let summaryColumns = [
         GridItem(.flexible(), spacing: 12),
         GridItem(.flexible(), spacing: 12),
@@ -973,79 +976,93 @@ private struct CourseAnnouncementsContent: View {
     }
 
     var body: some View {
-        HStack {
-            Text("Announcements")
-                .font(.title2.weight(.semibold))
+        Group {
+            HStack {
+                Text("Announcements")
+                    .font(.title2.weight(.semibold))
 
-            Spacer()
+                Spacer()
 
-            Button("Refresh Announcements") {
-                Task {
-                    await store.loadAnnouncements(for: course.id)
+                Button("Refresh Announcements") {
+                    Task {
+                        await store.loadAnnouncements(for: course.id)
+                    }
                 }
+                .disabled(isLoading)
             }
-            .disabled(isLoading)
-        }
 
-        LazyVGrid(columns: summaryColumns, spacing: 12) {
-            SummaryCard(
-                title: "Total",
-                value: "\(announcements.count)",
-                detail: "Announcements Canvas returned for this course.",
-                systemImage: "megaphone",
-                tint: .indigo
+            LazyVGrid(columns: summaryColumns, spacing: 12) {
+                SummaryCard(
+                    title: "Total",
+                    value: "\(announcements.count)",
+                    detail: "Announcements Canvas returned for this course.",
+                    systemImage: "megaphone",
+                    tint: .indigo
+                )
+
+                SummaryCard(
+                    title: "Unread",
+                    value: "\(unreadCount)",
+                    detail: "Announcements Canvas marks as unread.",
+                    systemImage: "circle.fill",
+                    tint: .blue
+                )
+
+                SummaryCard(
+                    title: "Restricted",
+                    value: "\(lockedCount)",
+                    detail: "Announcements locked for the current user.",
+                    systemImage: "lock",
+                    tint: .orange
+                )
+            }
+
+            CourseWorkspaceControls(
+                searchPrompt: "Search announcements",
+                searchQuery: $searchQuery,
+                filter: $filter,
+                sort: $sort,
+                shownCount: visibleAnnouncements.count,
+                totalCount: announcements.count
             )
 
-            SummaryCard(
-                title: "Unread",
-                value: "\(unreadCount)",
-                detail: "Announcements Canvas marks as unread.",
-                systemImage: "circle.fill",
-                tint: .blue
-            )
+            if isLoading && announcements.isEmpty {
+                ProgressView("Loading announcements...")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 24)
+            } else if announcements.isEmpty {
+                SetupPromptView(
+                    title: "No Announcements Yet",
+                    message: "Canvas has not returned announcements for this course."
+                )
+            } else if visibleAnnouncements.isEmpty {
+                SetupPromptView(
+                    title: "No Matching Announcements",
+                    message: "Change the search, filter, or sort controls to review more announcements."
+                )
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(visibleAnnouncements) { announcement in
+                        CourseAnnouncementRow(announcement: announcement) {
+                            selectedAnnouncement = announcement
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selectedAnnouncement = announcement
+                        }
 
-            SummaryCard(
-                title: "Restricted",
-                value: "\(lockedCount)",
-                detail: "Announcements locked for the current user.",
-                systemImage: "lock",
-                tint: .orange
-            )
-        }
-
-        CourseWorkspaceControls(
-            searchPrompt: "Search announcements",
-            searchQuery: $searchQuery,
-            filter: $filter,
-            sort: $sort,
-            shownCount: visibleAnnouncements.count,
-            totalCount: announcements.count
-        )
-
-        if isLoading && announcements.isEmpty {
-            ProgressView("Loading announcements...")
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 24)
-        } else if announcements.isEmpty {
-            SetupPromptView(
-                title: "No Announcements Yet",
-                message: "Canvas has not returned announcements for this course."
-            )
-        } else if visibleAnnouncements.isEmpty {
-            SetupPromptView(
-                title: "No Matching Announcements",
-                message: "Change the search, filter, or sort controls to review more announcements."
-            )
-        } else {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(visibleAnnouncements) { announcement in
-                    CourseAnnouncementRow(announcement: announcement)
-
-                    if announcement.id != visibleAnnouncements.last?.id {
-                        Divider()
+                        if announcement.id != visibleAnnouncements.last?.id {
+                            Divider()
+                        }
                     }
                 }
             }
+        }
+        .sheet(item: $selectedAnnouncement) { announcement in
+            CourseAnnouncementDetailView(
+                announcement: announcement,
+                courseName: course.name
+            )
         }
     }
 
@@ -1069,6 +1086,7 @@ private struct CourseAnnouncementsContent: View {
 
 private struct CourseAnnouncementRow: View {
     let announcement: CourseAnnouncement
+    var onRead: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1104,6 +1122,13 @@ private struct CourseAnnouncementRow: View {
 
                 Spacer()
 
+                if let onRead {
+                    Button("Read") {
+                        onRead()
+                    }
+                    .font(.caption.weight(.semibold))
+                }
+
                 if let htmlURL = announcement.htmlURL {
                     Link("Open in Canvas", destination: htmlURL)
                         .font(.caption.weight(.semibold))
@@ -1114,6 +1139,143 @@ private struct CourseAnnouncementRow: View {
         }
         .padding(.vertical, 10)
     }
+}
+
+private struct CourseAnnouncementDetailView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let announcement: CourseAnnouncement
+    let courseName: String
+
+    @State private var renderedBody: AttributedString?
+    @State private var didAttemptRender = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                header
+
+                bodyContent
+
+                if let htmlURL = announcement.htmlURL {
+                    Link("Open in Canvas", destination: htmlURL)
+                        .font(.headline)
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: 760, alignment: .leading)
+        }
+        .frame(minWidth: 540, minHeight: 440)
+        .onAppear {
+            guard !didAttemptRender else { return }
+            renderedBody = canvasAnnouncementAttributedBody(from: announcement.message)
+            didAttemptRender = true
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(announcement.title)
+                        .font(.largeTitle.weight(.semibold))
+
+                    Text(courseName)
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if announcement.isUnread {
+                    PillBadge(text: "Unread", tint: .blue)
+                }
+
+                if announcement.lockedForUser == true {
+                    PillBadge(text: "Restricted", tint: .orange)
+                }
+
+                Button("Close") {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+
+            HStack(spacing: 12) {
+                Label(
+                    DisplayFormatters.rowDateText(date: announcement.displayDate),
+                    systemImage: "clock"
+                )
+
+                if let relative = DisplayFormatters.relativeString(date: announcement.displayDate) {
+                    Text(relative)
+                }
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var bodyContent: some View {
+        if let renderedBody {
+            Text(renderedBody)
+                .font(.system(size: 15))
+                .lineSpacing(4)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else if didAttemptRender, let fallback = announcement.summaryText {
+            Text(fallback)
+                .font(.system(size: 15))
+                .lineSpacing(4)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else if didAttemptRender {
+            Text("Canvas did not return body content for this announcement.")
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            ProgressView("Rendering announcement...")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 24)
+        }
+    }
+}
+
+private func canvasAnnouncementAttributedBody(from html: String?) -> AttributedString? {
+    guard let html, !html.isEmpty else {
+        return nil
+    }
+
+    guard let data = html.data(using: .utf8) else {
+        return nil
+    }
+
+    let options: [NSAttributedString.DocumentReadingOptionKey: Any] = [
+        .documentType: NSAttributedString.DocumentType.html,
+        .characterEncoding: String.Encoding.utf8.rawValue
+    ]
+
+    guard let nsAttributed = try? NSAttributedString(
+        data: data,
+        options: options,
+        documentAttributes: nil
+    ) else {
+        return nil
+    }
+
+    let mutable = NSMutableAttributedString(attributedString: nsAttributed)
+    let fullRange = NSRange(location: 0, length: mutable.length)
+    mutable.removeAttribute(.font, range: fullRange)
+    mutable.removeAttribute(.foregroundColor, range: fullRange)
+    mutable.removeAttribute(.backgroundColor, range: fullRange)
+
+    let trimmed = mutable.string.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        return nil
+    }
+
+    return AttributedString(mutable)
 }
 
 private struct CourseSyllabusContent: View {
