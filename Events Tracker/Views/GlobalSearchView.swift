@@ -5,6 +5,51 @@
 
 import SwiftUI
 
+struct GlobalSearchQueryState {
+    private(set) var draftQuery = ""
+    private(set) var submittedQuery = ""
+
+    var activeQuery: String? {
+        guard !shouldShowRecentSearches, !shouldShowPendingSearchPrompt else {
+            return nil
+        }
+
+        return submittedQuery
+    }
+
+    var shouldShowRecentSearches: Bool {
+        trimmedDraftQuery.isEmpty
+    }
+
+    var shouldShowPendingSearchPrompt: Bool {
+        !trimmedDraftQuery.isEmpty && trimmedDraftQuery != submittedQuery
+    }
+
+    mutating func updateDraftQuery(_ query: String) {
+        draftQuery = query
+
+        if trimmedDraftQuery.isEmpty {
+            submittedQuery = ""
+        }
+    }
+
+    mutating func submitSearch() {
+        let trimmedQuery = trimmedDraftQuery
+        draftQuery = trimmedQuery
+        submittedQuery = trimmedQuery
+    }
+
+    mutating func useRecentSearchTerm(_ term: String) {
+        let trimmedTerm = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        draftQuery = trimmedTerm
+        submittedQuery = trimmedTerm
+    }
+
+    private var trimmedDraftQuery: String {
+        draftQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 struct GlobalSearchDisplayState {
     let visibleResults: [GlobalSearchResult]
     let topResults: [GlobalSearchResult]
@@ -46,14 +91,17 @@ struct GlobalSearchView: View {
     @EnvironmentObject private var store: CanvasStore
     let onNavigateToCourse: () -> Void
 
-    @State private var query = ""
+    @State private var searchState = GlobalSearchQueryState()
     @State private var selectedKind: GlobalSearchResultKind?
 
     var body: some View {
-        let displayState = GlobalSearchDisplayState(
-            results: store.globalSearchResults(for: query),
-            selectedKind: selectedKind
-        )
+        let activeQuery = searchState.activeQuery
+        let displayState = activeQuery.map { query in
+            GlobalSearchDisplayState(
+                results: store.globalSearchResults(for: query),
+                selectedKind: selectedKind
+            )
+        }
 
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -64,16 +112,18 @@ struct GlobalSearchView: View {
 
                 searchControls
 
-                if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if searchState.shouldShowRecentSearches {
                     recentSearches
-                } else if displayState.visibleResults.isEmpty {
+                } else if searchState.shouldShowPendingSearchPrompt {
+                    pendingSearchPrompt
+                } else if let displayState, displayState.visibleResults.isEmpty {
                     SetupPromptView(
                         title: "No Matching Results",
                         message: "Try another term or load more course sections first. Search only covers currently synced and cached data.",
                         systemImage: "magnifyingglass",
                         tint: .indigo
                     )
-                } else {
+                } else if let displayState {
                     VStack(alignment: .leading, spacing: 18) {
                         Text(displayState.resultCountLabel)
                             .font(.subheadline)
@@ -103,15 +153,21 @@ struct GlobalSearchView: View {
 
     private var searchControls: some View {
         HStack(spacing: 12) {
-            TextField("Search everything loaded", text: $query)
+            TextField(
+                "Search everything loaded",
+                text: Binding(
+                    get: { searchState.draftQuery },
+                    set: { searchState.updateDraftQuery($0) }
+                )
+            )
                 .textFieldStyle(.roundedBorder)
                 .frame(minWidth: 260, idealWidth: 420, maxWidth: 560)
                 .onSubmit {
-                    store.rememberSearchTerm(query)
+                    submitSearch()
                 }
 
             Button("Search") {
-                store.rememberSearchTerm(query)
+                submitSearch()
             }
             .keyboardShortcut(.defaultAction)
 
@@ -130,9 +186,26 @@ struct GlobalSearchView: View {
         }
     }
 
+    private var pendingSearchPrompt: some View {
+        SetupPromptView(
+            title: "Ready to Search",
+            message: "Press Return or Search to search loaded Canvas data.",
+            systemImage: "magnifyingglass",
+            tint: .indigo
+        )
+    }
+
+    private func submitSearch() {
+        searchState.submitSearch()
+
+        if let query = searchState.activeQuery {
+            store.rememberSearchTerm(query)
+        }
+    }
+
     @ViewBuilder
     private func resultSection(_ results: [GlobalSearchResult]) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(results) { result in
                 GlobalSearchResultRow(result: result, onNavigateToCourse: onNavigateToCourse)
 
@@ -168,7 +241,7 @@ struct GlobalSearchView: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 8)], alignment: .leading, spacing: 8) {
                     ForEach(store.recentSearchTerms, id: \.self) { term in
                         Button {
-                            query = term
+                            searchState.useRecentSearchTerm(term)
                         } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: "clock")

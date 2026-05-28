@@ -3047,6 +3047,26 @@ struct Events_TrackerTests {
         #expect(assignmentState.resultCountLabel == "1 assignment result")
     }
 
+    @Test func globalSearchQueryStateRequiresSubmittedSearchBeforeActivatingQuery() async throws {
+        var state = GlobalSearchQueryState()
+
+        state.updateDraftQuery(" ga ")
+
+        #expect(state.activeQuery == nil)
+        #expect(state.shouldShowPendingSearchPrompt)
+        #expect(!state.shouldShowRecentSearches)
+
+        state.submitSearch()
+
+        #expect(state.activeQuery == "ga")
+        #expect(!state.shouldShowPendingSearchPrompt)
+
+        state.updateDraftQuery("")
+
+        #expect(state.activeQuery == nil)
+        #expect(state.shouldShowRecentSearches)
+    }
+
     @MainActor
     @Test func canvasStorePriorityNowPrefersMissingWorkOverPinnedUpcomingEvents() async throws {
         let dueSoon = Date(timeIntervalSince1970: 1_710_000_000 + 2 * 60 * 60)

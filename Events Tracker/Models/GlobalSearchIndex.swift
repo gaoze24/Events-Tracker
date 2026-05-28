@@ -34,7 +34,7 @@ struct GlobalSearchIndex {
                 partialResult[folder.id] = courseID
             }
         }
-        var candidates: [GlobalSearchResult] = []
+        var candidates: [GlobalSearchResult?] = []
         let missingAssignmentIdentities = Set(missingSubmissions.map(\.assignmentIdentity))
 
         for course in courses {
@@ -264,7 +264,7 @@ struct GlobalSearchIndex {
         }
 
         return candidates
-            .filter { $0.score > 0 }
+            .compactMap { $0 }
             .sorted {
                 if $0.score != $1.score {
                     return $0.score > $1.score
@@ -294,8 +294,7 @@ struct GlobalSearchIndex {
         isOverdue: Bool = false,
         isUnread: Bool = false,
         isAssignmentBackedEvent: Bool = false
-    ) -> GlobalSearchResult {
-        let searchableText = fields.compactMap { $0 }.joined(separator: " ")
+    ) -> GlobalSearchResult? {
         let score = score(
             kind: kind,
             title: title,
@@ -311,6 +310,11 @@ struct GlobalSearchIndex {
             isAssignmentBackedEvent: isAssignmentBackedEvent,
             isActionable: url != nil
         )
+        guard score > 0 else {
+            return nil
+        }
+
+        let searchableText = fields.compactMap { $0 }.joined(separator: " ")
         return GlobalSearchResult(
             id: id,
             kind: kind,
