@@ -64,6 +64,8 @@ struct SettingsView: View {
     @State private var telegramChatSelection = TelegramChatSelectionState()
     @State private var isLoadingTelegramChats = false
     @State private var isSendingTelegramTest = false
+    @State private var autoSyncEnabled = false
+    @State private var autoSyncIntervalMinutes = 30
     @State private var downloadCacheLimit: DownloadCacheLimitPreset = .unlimited
     @State private var statusMessage: String?
     @State private var didPopulateFields = false
@@ -87,6 +89,18 @@ struct SettingsView: View {
                         Stepper(value: $lookaheadDays, in: 7...45) {
                             Text("Look ahead \(lookaheadDays) days for upcoming events")
                         }
+                    }
+
+                    Section("Auto Sync") {
+                        Toggle("Enable automatic sync while the app is open", isOn: $autoSyncEnabled)
+
+                        Stepper(value: $autoSyncIntervalMinutes, in: 5...240, step: 5) {
+                            Text("Sync every \(autoSyncIntervalMinutes) minutes")
+                        }
+                        .disabled(!autoSyncEnabled)
+
+                        Text("Automatic sync refreshes the dashboard and metadata for cached or offline-priority courses. It does not download file contents.")
+                            .foregroundStyle(.secondary)
                     }
 
                     Section("Telegram Reminders") {
@@ -235,6 +249,8 @@ struct SettingsView: View {
         telegramReminderWindowHours = telegramConfig.normalizedReminderWindowHours
         telegramCheckIntervalMinutes = telegramConfig.normalizedCheckIntervalMinutes
         telegramRepeatIntervalHours = telegramConfig.normalizedRepeatIntervalHours
+        autoSyncEnabled = store.config.autoSync.isEnabled
+        autoSyncIntervalMinutes = store.config.autoSync.normalizedIntervalMinutes
         downloadCacheLimit = store.config.downloadCacheLimit
         didPopulateFields = true
     }
@@ -255,12 +271,18 @@ struct SettingsView: View {
                 return false
             }
 
+            let autoSyncConfig = AutoSyncConfig(
+                isEnabled: autoSyncEnabled,
+                intervalMinutes: autoSyncIntervalMinutes
+            )
+
             let credentialsChanged = try store.saveConfiguration(
                 baseURL: baseURL,
                 token: token,
                 lookaheadDays: lookaheadDays,
                 telegramReminders: telegramConfig,
-                downloadCacheLimit: downloadCacheLimit
+                downloadCacheLimit: downloadCacheLimit,
+                autoSync: autoSyncConfig
             )
 
             statusMessage = credentialsChanged

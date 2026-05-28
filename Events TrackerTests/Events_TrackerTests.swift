@@ -51,6 +51,19 @@ struct Events_TrackerTests {
         #expect(config.isComplete)
     }
 
+    @Test func autoSyncConfigDefaultsDisabledAndClampsInterval() async throws {
+        let defaults = AutoSyncConfig()
+
+        #expect(!defaults.isEnabled)
+        #expect(defaults.normalizedIntervalMinutes == 30)
+
+        let tooShort = AutoSyncConfig(isEnabled: true, intervalMinutes: 1)
+        let tooLong = AutoSyncConfig(isEnabled: true, intervalMinutes: 999)
+
+        #expect(tooShort.normalizedIntervalMinutes == 5)
+        #expect(tooLong.normalizedIntervalMinutes == 240)
+    }
+
     @Test func reminderHistoryKeysCombineCourseAndAssignmentIDs() async throws {
         let key = ReminderHistoryManager.historyKey(courseID: 12, assignmentID: 34)
 
@@ -436,6 +449,29 @@ struct Events_TrackerTests {
         #expect(!storedJSON.contains("123:abc"))
         #expect(!storedJSON.contains("\"token\""))
         #expect(!storedJSON.contains("\"botToken\""))
+    }
+
+    @Test func canvasConfigManagerRoundTripsAutoSyncSettings() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let fileManager = FileManager.default
+        try? fileManager.removeItem(at: configURL)
+        defer { try? fileManager.removeItem(at: configURL) }
+
+        let tokenStore = InMemoryCanvasTokenStore()
+        let manager = CanvasConfigManager(configURL: configURL, tokenStore: tokenStore)
+        let config = CanvasConfig(
+            baseURL: "https://canvas.example.edu",
+            token: "abc123",
+            autoSync: AutoSyncConfig(isEnabled: true, intervalMinutes: 45)
+        )
+
+        try manager.saveConfig(config)
+
+        let loaded = manager.loadConfig()
+
+        #expect(loaded.autoSync.isEnabled)
+        #expect(loaded.autoSync.intervalMinutes == 45)
+        #expect(loaded.autoSync.normalizedIntervalMinutes == 45)
     }
 
     @Test func upcomingEventPrefersAssignmentDueDate() async throws {
@@ -1249,6 +1285,207 @@ struct Events_TrackerTests {
         #expect(store.errorMessage == nil)
         #expect(!store.isLoadingModules(for: 42))
         #expect(!store.hasLoadedModules(for: 42))
+    }
+
+    @MainActor
+    @Test func canvasStoreSaveConfigurationPersistsAutoSyncSettings() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let dashboardCacheURL = makeDashboardCacheTempURL()
+        let courseDetailCacheURL = makeCourseDetailCacheTempURL()
+        let fileManager = FileManager.default
+        [configURL, dashboardCacheURL, courseDetailCacheURL].forEach { url in
+            try? fileManager.removeItem(at: url)
+        }
+        defer {
+            [configURL, dashboardCacheURL, courseDetailCacheURL].forEach { url in
+                try? fileManager.removeItem(at: url)
+            }
+        }
+
+        let configManager = CanvasConfigManager(configURL: configURL, tokenStore: InMemoryCanvasTokenStore())
+        let store = CanvasStore(
+            configManager: configManager,
+            databaseManager: DatabaseManager(cacheURL: dashboardCacheURL),
+            networkManager: .shared,
+            detailCacheManager: CourseDetailCacheManager(cacheURL: courseDetailCacheURL)
+        )
+
+        try store.saveConfiguration(
+            baseURL: "https://canvas.example.edu",
+            token: "abc123",
+            lookaheadDays: 14,
+            telegramReminders: TelegramReminderConfig(),
+            downloadCacheLimit: .oneGB,
+            autoSync: AutoSyncConfig(isEnabled: true, intervalMinutes: 45)
+        )
+
+        let loaded = configManager.loadConfig()
+
+        #expect(store.config.autoSync.isEnabled)
+        #expect(store.config.autoSync.intervalMinutes == 45)
+        #expect(loaded.autoSync.isEnabled)
+        #expect(loaded.autoSync.intervalMinutes == 45)
+    }
+
+    @MainActor
+    @Test func canvasStoreSaveConfigurationPreservesAutoSyncWhenOmitted() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let dashboardCacheURL = makeDashboardCacheTempURL()
+        let courseDetailCacheURL = makeCourseDetailCacheTempURL()
+        let fileManager = FileManager.default
+        [configURL, dashboardCacheURL, courseDetailCacheURL].forEach { url in
+            try? fileManager.removeItem(at: url)
+        }
+        defer {
+            [configURL, dashboardCacheURL, courseDetailCacheURL].forEach { url in
+                try? fileManager.removeItem(at: url)
+            }
+        }
+
+        let configManager = CanvasConfigManager(configURL: configURL, tokenStore: InMemoryCanvasTokenStore())
+        try configManager.saveConfig(CanvasConfig(
+            baseURL: "https://canvas.example.edu",
+            token: "abc123",
+            autoSync: AutoSyncConfig(isEnabled: true, intervalMinutes: 60)
+        ))
+        let store = CanvasStore(
+            configManager: configManager,
+            databaseManager: DatabaseManager(cacheURL: dashboardCacheURL),
+            networkManager: .shared,
+            detailCacheManager: CourseDetailCacheManager(cacheURL: courseDetailCacheURL)
+        )
+
+        try store.saveConfiguration(
+            baseURL: "https://canvas.example.edu",
+            token: "abc123",
+            lookaheadDays: 21,
+            telegramReminders: TelegramReminderConfig(),
+            downloadCacheLimit: .twoGB
+        )
+
+        let loaded = configManager.loadConfig()
+
+        #expect(loaded.autoSync.isEnabled)
+        #expect(loaded.autoSync.intervalMinutes == 60)
+    }
+
+    @MainActor
+    @Test func canvasStoreAutoSyncRefreshesDashboardAndCachedCourseMetadata() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let dashboardCacheURL = makeDashboardCacheTempURL()
+        let courseDetailCacheURL = makeCourseDetailCacheTempURL()
+        let preferencesURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "EventsTracker-\(UUID().uuidString)-course-preferences.json"
+        )
+        let fileMetadataURL = makeFileDownloadMetadataTempURL()
+        let downloadsURL = makeDownloadsTempDirectoryURL()
+        let fileManager = FileManager.default
+        [configURL, dashboardCacheURL, courseDetailCacheURL, preferencesURL, fileMetadataURL, downloadsURL].forEach { url in
+            try? fileManager.removeItem(at: url)
+        }
+        defer {
+            [configURL, dashboardCacheURL, courseDetailCacheURL, preferencesURL, fileMetadataURL, downloadsURL].forEach { url in
+                try? fileManager.removeItem(at: url)
+            }
+        }
+
+        let referenceDate = Date(timeIntervalSince1970: 1_710_000_000)
+        let configManager = CanvasConfigManager(configURL: configURL, tokenStore: InMemoryCanvasTokenStore())
+        try configManager.saveConfig(makeCanvasConfig())
+
+        let databaseManager = DatabaseManager(cacheURL: dashboardCacheURL)
+        try databaseManager.saveSnapshot(
+            CanvasSnapshot(
+                courses: [makeCourse(id: 42, name: "Cached Course")],
+                upcomingEvents: [],
+                missingSubmissions: [],
+                profile: nil,
+                syncedAt: referenceDate
+            )
+        )
+
+        let detailCacheManager = CourseDetailCacheManager(cacheURL: courseDetailCacheURL)
+        try detailCacheManager.saveCache(
+            CourseDetailCacheSnapshot(
+                assignmentsByCourseID: [
+                    42: [makeCourseAssignment(id: 10, name: "Old Cached Lab", dueAt: nil, courseID: 42)]
+                ],
+                modulesByCourseID: [:],
+                foldersByCourseID: [:],
+                filesByFolderID: [:],
+                announcementsByCourseID: [:],
+                syllabusByCourseID: [:],
+                peopleByCourseID: [:],
+                courseAccessedAtByCourseID: [42: referenceDate],
+                savedAt: referenceDate
+            )
+        )
+
+        let preferenceManager = CoursePreferenceManager(preferencesURL: preferencesURL)
+        try preferenceManager.savePreferences(CoursePreferencesSnapshot(offlinePriorityCourseIDs: [43]))
+
+        var requestedPaths: [String] = []
+        let requestedPathsLock = NSLock()
+        let session = makeCapturingURLSession { request in
+            let url = try #require(request.url)
+            requestedPathsLock.lock()
+            requestedPaths.append(url.path)
+            requestedPathsLock.unlock()
+
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            switch url.path {
+            case "/api/v1/courses":
+                return (response, Data(#"[{"id":42,"name":"Cached Course","workflow_state":"available"},{"id":43,"name":"Offline Course","workflow_state":"available"}]"#.utf8))
+            case "/api/v1/users/self/upcoming_events", "/api/v1/users/self/missing_submissions":
+                return (response, Data("[]".utf8))
+            case "/api/v1/users/self/profile":
+                return (response, Data(#"{"id":1,"name":"Student"}"#.utf8))
+            case "/api/v1/courses/42/assignments":
+                return (response, Data(#"[{"id":1,"name":"Fresh Cached Lab","course_id":42,"published":true}]"#.utf8))
+            case "/api/v1/courses/43/assignments":
+                return (response, Data(#"[{"id":2,"name":"Offline Lab","course_id":43,"published":true}]"#.utf8))
+            case "/api/v1/courses/42/modules", "/api/v1/courses/43/modules":
+                return (response, Data(#"[{"id":2,"name":"Week 1","position":1,"workflow_state":"active","published":true,"items":[] }]"#.utf8))
+            case "/api/v1/courses/42/folders":
+                return (response, Data(#"[{"id":420,"name":"Course Files","full_name":"Course Files"}]"#.utf8))
+            case "/api/v1/courses/43/folders":
+                return (response, Data(#"[{"id":430,"name":"Course Files","full_name":"Course Files"}]"#.utf8))
+            case "/api/v1/folders/420/files":
+                return (response, Data(#"[{"id":4200,"display_name":"Cached.pdf","filename":"Cached.pdf","folder_id":420,"content-type":"application/pdf","url":"https://canvas.example.edu/files/4200/download","size":5}]"#.utf8))
+            case "/api/v1/folders/430/files":
+                return (response, Data(#"[{"id":4300,"display_name":"Offline.pdf","filename":"Offline.pdf","folder_id":430,"content-type":"application/pdf","url":"https://canvas.example.edu/files/4300/download","size":5}]"#.utf8))
+            case "/api/v1/announcements":
+                return (response, Data(#"[{"id":5,"title":"Welcome","context_code":"course_42","read_state":"read"}]"#.utf8))
+            case "/api/v1/courses/42":
+                return (response, Data(#"{"id":42,"name":"Cached Course","syllabus_body":"<p>Policy</p>"}"#.utf8))
+            case "/api/v1/courses/43":
+                return (response, Data(#"{"id":43,"name":"Offline Course","syllabus_body":"<p>Policy</p>"}"#.utf8))
+            case "/api/v1/courses/42/users", "/api/v1/courses/43/users":
+                return (response, Data(#"[{"id":6,"name":"Dr. Smith","sortable_name":"Smith, Dr.","short_name":"Dr. Smith","enrollments":[{"type":"TeacherEnrollment","role":"TeacherEnrollment"}]}]"#.utf8))
+            default:
+                Issue.record("Unexpected auto sync request: \(url.path)")
+                return (response, Data("[]".utf8))
+            }
+        }
+
+        let store = CanvasStore(
+            configManager: configManager,
+            databaseManager: databaseManager,
+            networkManager: NetworkManager(session: session),
+            detailCacheManager: detailCacheManager,
+            preferenceManager: preferenceManager,
+            fileDownloadManager: FileDownloadManager(metadataURL: fileMetadataURL, downloadsDirectory: downloadsURL),
+            now: { referenceDate }
+        )
+
+        await store.refreshDashboardAndCachedDetails()
+
+        #expect(store.assignments(for: 42).map(\.name) == ["Fresh Cached Lab"])
+        #expect(store.assignments(for: 43).map(\.name) == ["Offline Lab"])
+        #expect(requestedPaths.contains("/api/v1/courses"))
+        #expect(requestedPaths.contains("/api/v1/courses/42/assignments"))
+        #expect(requestedPaths.contains("/api/v1/courses/43/assignments"))
+        #expect(store.fileDownloadSnapshot.downloadedRecords.isEmpty)
     }
 
     @MainActor

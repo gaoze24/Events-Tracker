@@ -144,6 +144,7 @@ final class CanvasStore: ObservableObject {
     private let now: () -> Date
     private var courseDetailAccessDates: [Int: Date]
     private var cacheMaintenanceTask: Task<Void, Never>?
+    private var autoSyncTask: Task<Void, Never>?
 
     init(
         configManager: CanvasConfigManager = .shared,
@@ -245,6 +246,7 @@ final class CanvasStore: ObservableObject {
 
     deinit {
         cacheMaintenanceTask?.cancel()
+        autoSyncTask?.cancel()
     }
 
     var isConfigured: Bool {
@@ -357,13 +359,53 @@ final class CanvasStore: ObservableObject {
 
         do {
             let snapshot = try await networkManager.fetchDashboardSnapshot(using: config)
+            guard !Task.isCancelled else {
+                isSyncing = false
+                return
+            }
+
             applySnapshot(snapshot)
             try databaseManager.saveSnapshot(snapshot)
         } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                isSyncing = false
+                return
+            }
+
             displayError(error)
         }
 
         isSyncing = false
+    }
+
+    func refreshDashboardAndCachedDetails() async {
+        let cachedCourseIDsToRefresh = cachedCourseDetailIDs
+        let offlinePriorityCourseIDsToRefresh = coursePreferences.offlinePriorityCourseIDs
+        let courseIDsToRefresh = cachedCourseIDsToRefresh.union(offlinePriorityCourseIDsToRefresh)
+
+        await refresh()
+
+        guard !Task.isCancelled, errorMessage == nil, !courseIDsToRefresh.isEmpty else {
+            return
+        }
+
+        isSyncing = true
+        defer {
+            isSyncing = false
+        }
+
+        let availableCourseIDs = Set(courses.map(\.id))
+        for courseID in courseIDsToRefresh.sorted() where availableCourseIDs.contains(courseID) {
+            guard !Task.isCancelled else {
+                return
+            }
+
+            if offlinePriorityCourseIDsToRefresh.contains(courseID) {
+                await preloadCourseMetadata(courseID: courseID)
+            } else {
+                await refreshCachedCourseMetadata(courseID: courseID)
+            }
+        }
     }
 
     @discardableResult
@@ -372,22 +414,35 @@ final class CanvasStore: ObservableObject {
         token: String,
         lookaheadDays: Int,
         telegramReminders: TelegramReminderConfig,
-        downloadCacheLimit: DownloadCacheLimitPreset = .unlimited
+        downloadCacheLimit: DownloadCacheLimitPreset = .unlimited,
+        autoSync: AutoSyncConfig? = nil
     ) throws -> Bool {
+        let nextAutoSync = autoSync ?? config.autoSync
+        let previousAutoSync = config.autoSync
         let updatedConfig = CanvasConfig(
             baseURL: baseURL,
             token: token,
             lookaheadDays: lookaheadDays,
             telegramReminders: telegramReminders,
-            downloadCacheLimit: downloadCacheLimit
+            downloadCacheLimit: downloadCacheLimit,
+            autoSync: nextAutoSync
         )
 
         let credentialsChanged = updatedConfig.normalizedBaseURL != config.normalizedBaseURL
             || updatedConfig.trimmedToken != config.trimmedToken
 
+        if credentialsChanged {
+            stopAutoSync()
+        }
+
         try configManager.saveConfig(updatedConfig)
         config = updatedConfig
         reminderService.updateConfig(updatedConfig)
+        restartAutoSyncIfNeeded(
+            previous: previousAutoSync,
+            current: updatedConfig.autoSync,
+            forceRestart: credentialsChanged
+        )
         errorMessage = nil
 
         if credentialsChanged {
@@ -1223,12 +1278,89 @@ final class CanvasStore: ObservableObject {
         await loadCourseFiles(for: courseID)
 
         for folder in courseFoldersByCourseID[courseID] ?? [] {
-            await loadFilesIfNeeded(for: folder.id)
+            guard !Task.isCancelled else {
+                return
+            }
+
+            await loadFiles(for: folder.id)
         }
 
         await loadAnnouncements(for: courseID)
         await loadSyllabus(for: courseID)
         await loadPeople(for: courseID)
+    }
+
+    private func refreshCachedCourseMetadata(courseID: Int) async {
+        guard config.isComplete, courses.contains(where: { $0.id == courseID }) else {
+            return
+        }
+
+        if courseAssignmentsByCourseID[courseID] != nil {
+            await loadAssignments(for: courseID)
+        }
+
+        if courseModulesByCourseID[courseID] != nil {
+            await loadModules(for: courseID)
+        }
+
+        let cachedFolderIDs = Set((courseFoldersByCourseID[courseID] ?? []).map(\.id))
+        if courseFoldersByCourseID[courseID] != nil {
+            await loadCourseFiles(for: courseID)
+        }
+
+        let currentFolderIDs = Set((courseFoldersByCourseID[courseID] ?? []).map(\.id))
+        for folderID in cachedFolderIDs.union(currentFolderIDs).sorted() {
+            if courseFilesByFolderID[folderID] != nil {
+                await loadFiles(for: folderID)
+            }
+        }
+
+        if courseAnnouncementsByCourseID[courseID] != nil {
+            await loadAnnouncements(for: courseID)
+        }
+
+        if courseSyllabusByCourseID[courseID] != nil {
+            await loadSyllabus(for: courseID)
+        }
+
+        if coursePeopleByCourseID[courseID] != nil {
+            await loadPeople(for: courseID)
+        }
+
+        await refreshCachedModuleItemDetails(courseID: courseID)
+    }
+
+    private func refreshCachedModuleItemDetails(courseID: Int) async {
+        let cachedKeys = Set(moduleItemDetailsByKey.keys.compactMap(CourseModuleItemDetailKey.init(rawValue:)))
+            .filter { $0.courseID == courseID }
+
+        guard !cachedKeys.isEmpty else {
+            return
+        }
+
+        if courseModulesByCourseID[courseID] == nil {
+            await loadModules(for: courseID)
+        }
+
+        let cachedItems = (courseModulesByCourseID[courseID] ?? [])
+            .flatMap { $0.items ?? [] }
+            .compactMap { item -> (CourseModuleItem, CourseModuleItemDetailKey)? in
+                guard let key = CourseModuleItemDetailKey.key(courseID: courseID, item: item),
+                      cachedKeys.contains(key)
+                else {
+                    return nil
+                }
+
+                return (item, key)
+            }
+
+        for (item, key) in cachedItems {
+            guard !Task.isCancelled else {
+                return
+            }
+
+            await loadModuleItemDetail(courseID: courseID, item: item, key: key)
+        }
     }
 
     func globalSearchResults(for query: String) -> [GlobalSearchResult] {
@@ -1585,6 +1717,38 @@ final class CanvasStore: ObservableObject {
         cacheMaintenanceTask = nil
     }
 
+    func startAutoSync() {
+        guard autoSyncTask == nil, config.isComplete, config.autoSync.isEnabled else {
+            return
+        }
+
+        autoSyncTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else {
+                    return
+                }
+
+                let minutes = self.config.autoSync.normalizedIntervalMinutes
+                try? await Task.sleep(nanoseconds: UInt64(minutes) * 60 * 1_000_000_000)
+
+                guard !Task.isCancelled else {
+                    return
+                }
+
+                guard self.config.isComplete, self.config.autoSync.isEnabled, !self.isSyncing else {
+                    continue
+                }
+
+                await self.refreshDashboardAndCachedDetails()
+            }
+        }
+    }
+
+    func stopAutoSync() {
+        autoSyncTask?.cancel()
+        autoSyncTask = nil
+    }
+
     func pruneCourseDetailMemoryCache(referenceDate: Date? = nil) {
         let currentDate = referenceDate ?? now()
         let snapshot = buildCourseDetailCacheSnapshot(savedAt: currentDate)
@@ -1747,6 +1911,22 @@ final class CanvasStore: ObservableObject {
     private var courseIDsToKeepInMemory: Set<Int> {
         coursePreferences.offlinePriorityCourseIDs
             .union(Set([selectedCourseID].compactMap { $0 }))
+    }
+
+    private func restartAutoSyncIfNeeded(
+        previous: AutoSyncConfig,
+        current: AutoSyncConfig,
+        forceRestart: Bool = false
+    ) {
+        guard forceRestart || previous != current else {
+            if autoSyncTask == nil {
+                startAutoSync()
+            }
+            return
+        }
+
+        stopAutoSync()
+        startAutoSync()
     }
 
     private func persistCoursePreferences() {

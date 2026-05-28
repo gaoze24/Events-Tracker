@@ -44,6 +44,7 @@ struct Events_TrackerApp: App {
 
                     store.startTelegramReminderService()
                     store.startCacheMaintenance()
+                    store.startAutoSync()
                     await store.refreshIfNeeded()
                 }
         }

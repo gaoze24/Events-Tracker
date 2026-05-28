@@ -84,6 +84,40 @@ struct TelegramReminderConfig: Codable, Equatable {
     }
 }
 
+struct AutoSyncConfig: Codable, Equatable {
+    var isEnabled: Bool = false
+    var intervalMinutes: Int = 30
+
+    enum CodingKeys: String, CodingKey {
+        case isEnabled
+        case intervalMinutes
+    }
+
+    init(
+        isEnabled: Bool = false,
+        intervalMinutes: Int = 30
+    ) {
+        self.isEnabled = isEnabled
+        self.intervalMinutes = intervalMinutes
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        intervalMinutes = try container.decodeIfPresent(Int.self, forKey: .intervalMinutes) ?? 30
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(isEnabled, forKey: .isEnabled)
+        try container.encode(intervalMinutes, forKey: .intervalMinutes)
+    }
+
+    var normalizedIntervalMinutes: Int {
+        min(max(intervalMinutes, 5), 240)
+    }
+}
+
 enum DownloadCacheLimitPreset: String, Codable, CaseIterable, Identifiable {
     case fiveHundredMB
     case oneGB
@@ -130,6 +164,7 @@ struct CanvasConfig: Codable, Equatable {
     var lookaheadDays: Int = 14
     var telegramReminders: TelegramReminderConfig = TelegramReminderConfig()
     var downloadCacheLimit: DownloadCacheLimitPreset = .unlimited
+    var autoSync: AutoSyncConfig = AutoSyncConfig()
 
     enum CodingKeys: String, CodingKey {
         case baseURL
@@ -137,6 +172,7 @@ struct CanvasConfig: Codable, Equatable {
         case lookaheadDays
         case telegramReminders
         case downloadCacheLimit
+        case autoSync
     }
 
     init(
@@ -144,13 +180,15 @@ struct CanvasConfig: Codable, Equatable {
         token: String = "",
         lookaheadDays: Int = 14,
         telegramReminders: TelegramReminderConfig = TelegramReminderConfig(),
-        downloadCacheLimit: DownloadCacheLimitPreset = .unlimited
+        downloadCacheLimit: DownloadCacheLimitPreset = .unlimited,
+        autoSync: AutoSyncConfig = AutoSyncConfig()
     ) {
         self.baseURL = baseURL
         self.token = token
         self.lookaheadDays = lookaheadDays
         self.telegramReminders = telegramReminders
         self.downloadCacheLimit = downloadCacheLimit
+        self.autoSync = autoSync
     }
 
     init(from decoder: Decoder) throws {
@@ -166,6 +204,10 @@ struct CanvasConfig: Codable, Equatable {
             DownloadCacheLimitPreset.self,
             forKey: .downloadCacheLimit
         ) ?? .unlimited
+        autoSync = try container.decodeIfPresent(
+            AutoSyncConfig.self,
+            forKey: .autoSync
+        ) ?? AutoSyncConfig()
     }
 
     func encode(to encoder: Encoder) throws {
@@ -174,6 +216,7 @@ struct CanvasConfig: Codable, Equatable {
         try container.encode(lookaheadDays, forKey: .lookaheadDays)
         try container.encode(telegramReminders, forKey: .telegramReminders)
         try container.encode(downloadCacheLimit, forKey: .downloadCacheLimit)
+        try container.encode(autoSync, forKey: .autoSync)
     }
 
     var normalizedBaseURL: String {
