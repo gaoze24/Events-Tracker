@@ -54,6 +54,9 @@ struct InboxView: View {
     }
 
     var body: some View {
+        let conversationsToShow = visibleConversations
+        let lastConversationID = conversationsToShow.last?.id
+
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 ScreenHeader(
@@ -98,17 +101,17 @@ struct InboxView: View {
                         title: "No Conversations Loaded",
                         message: "Refresh Inbox to load recent Canvas conversations."
                     )
-                } else if visibleConversations.isEmpty {
+                } else if conversationsToShow.isEmpty {
                     SetupPromptView(
                         title: "No Matching Conversations",
                         message: "Change the search, course, or status filters."
                     )
                 } else {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(visibleConversations) { conversation in
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(conversationsToShow) { conversation in
                             InboxConversationRow(conversation: conversation)
 
-                            if conversation.id != visibleConversations.last?.id {
+                            if conversation.id != lastConversationID {
                                 Divider()
                             }
                         }

@@ -84,7 +84,7 @@ struct SyncCenterView: View {
     }
 
     private var actions: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        return VStack(alignment: .leading, spacing: 12) {
             Text("Actions")
                 .font(.title2.weight(.semibold))
 
@@ -135,27 +135,30 @@ struct SyncCenterView: View {
     }
 
     private var courseReadinessSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let readinessItems = store.courseOfflineReadiness
+        let lastReadinessID = readinessItems.last?.id
+
+        return VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Course Offline Readiness")
                     .font(.title2.weight(.semibold))
 
                 Spacer()
 
-                Text("\(store.courseOfflineReadiness.filter(\.isFullyCached).count) ready")
+                Text("\(readinessItems.filter(\.isFullyCached).count) ready")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
 
-            if store.courseOfflineReadiness.isEmpty {
+            if readinessItems.isEmpty {
                 SetupPromptView(
                     title: "No Courses Loaded",
                     message: "Sync the dashboard before preparing courses for offline use."
                 )
                 .frame(minHeight: 260)
             } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(store.courseOfflineReadiness) { readiness in
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(readinessItems) { readiness in
                         CourseOfflineReadinessRow(
                             readiness: readiness,
                             isPreloading: store.preloadingCourseIDs.contains(readiness.courseID)
@@ -172,7 +175,7 @@ struct SyncCenterView: View {
                             }
                         )
 
-                        if readiness.id != store.courseOfflineReadiness.last?.id {
+                        if readiness.id != lastReadinessID {
                             Divider()
                         }
                     }
@@ -382,21 +385,24 @@ private struct OfflineDownloadPlannerView: View {
     }
 
     private var plannerTree: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let foldersToShow = folders
+        let lastFolderID = foldersToShow.last?.id
+
+        return LazyVStack(alignment: .leading, spacing: 0) {
             if selectedCourse == nil {
                 SetupPromptView(
                     title: "No Course Selected",
                     message: "Sync courses before planning offline downloads."
                 )
                 .frame(minHeight: 180)
-            } else if folders.isEmpty {
+            } else if foldersToShow.isEmpty {
                 SetupPromptView(
                     title: "No File Metadata Loaded",
                     message: "Load metadata for this course before selecting files."
                 )
                 .frame(minHeight: 180)
             } else {
-                ForEach(folders) { folder in
+                ForEach(foldersToShow) { folder in
                     OfflineFolderSelectionRow(
                         folder: folder,
                         files: store.files(for: folder.id),
@@ -404,7 +410,7 @@ private struct OfflineDownloadPlannerView: View {
                         selection: $selection
                     )
 
-                    if folder.id != folders.last?.id {
+                    if folder.id != lastFolderID {
                         Divider()
                     }
                 }
@@ -492,13 +498,15 @@ private struct OfflineFolderSelectionRow: View {
                 }
             }
 
-            ForEach(files) { file in
-                OfflineFileSelectionRow(
-                    file: file,
-                    isCourseSelected: isCourseSelected,
-                    selection: $selection
-                )
-                    .padding(.leading, 24)
+            LazyVStack(alignment: .leading, spacing: 8) {
+                ForEach(files) { file in
+                    OfflineFileSelectionRow(
+                        file: file,
+                        isCourseSelected: isCourseSelected,
+                        selection: $selection
+                    )
+                        .padding(.leading, 24)
+                }
             }
         }
         .padding(.vertical, 10)

@@ -53,6 +53,11 @@ struct AssignmentsView: View {
     }
 
     var body: some View {
+        let overdueItems = overdueAssignments
+        let upcomingItems = upcomingAssignments
+        let lastOverdueID = overdueItems.last?.id
+        let lastUpcomingID = upcomingItems.last?.id
+
         if !store.isConfigured {
             SetupPromptView(
                 title: "Connect Canvas",
@@ -83,16 +88,16 @@ struct AssignmentsView: View {
                     ) {
                         MetricCard(
                             title: "Overdue",
-                            value: "\(overdueAssignments.count)",
-                            detail: overdueAssignments.isEmpty ? "Nothing overdue" : "Needs attention",
+                            value: "\(overdueItems.count)",
+                            detail: overdueItems.isEmpty ? "Nothing overdue" : "Needs attention",
                             systemImage: "exclamationmark.circle",
-                            tint: overdueAssignments.isEmpty ? .green : .red
+                            tint: overdueItems.isEmpty ? .green : .red
                         )
 
                         MetricCard(
                             title: "Upcoming",
-                            value: "\(upcomingAssignments.count)",
-                            detail: upcomingAssignments.isEmpty ? "All clear ahead" : "Plan ahead",
+                            value: "\(upcomingItems.count)",
+                            detail: upcomingItems.isEmpty ? "All clear ahead" : "Plan ahead",
                             systemImage: "calendar.badge.clock",
                             tint: .orange
                         )
@@ -111,14 +116,14 @@ struct AssignmentsView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         // Overdue section
                         if filter == .all || filter == .missing {
-                            if !overdueAssignments.isEmpty {
-                                AssignmentSection(title: "OVERDUE", accentColor: .red, count: overdueAssignments.count) {
-                                    ForEach(overdueAssignments) { assignment in
+                            if !overdueItems.isEmpty {
+                                AssignmentSection(title: "OVERDUE", accentColor: .red, count: overdueItems.count) {
+                                    ForEach(overdueItems) { assignment in
                                         AssignmentRow(
                                             assignment: assignment,
                                             courseName: store.courseName(for: assignment.courseID)
                                         )
-                                        if assignment.id != overdueAssignments.last?.id {
+                                        if assignment.id != lastOverdueID {
                                             Divider().padding(.leading, 32)
                                         }
                                     }
@@ -132,14 +137,14 @@ struct AssignmentsView: View {
 
                         // Upcoming section
                         if filter == .all || filter == .upcoming {
-                            if !upcomingAssignments.isEmpty {
-                                AssignmentSection(title: "UPCOMING", accentColor: .orange, count: upcomingAssignments.count) {
-                                    ForEach(upcomingAssignments) { assignment in
+                            if !upcomingItems.isEmpty {
+                                AssignmentSection(title: "UPCOMING", accentColor: .orange, count: upcomingItems.count) {
+                                    ForEach(upcomingItems) { assignment in
                                         AssignmentRow(
                                             assignment: assignment,
                                             courseName: store.courseName(for: assignment.courseID)
                                         )
-                                        if assignment.id != upcomingAssignments.last?.id {
+                                        if assignment.id != lastUpcomingID {
                                             Divider().padding(.leading, 32)
                                         }
                                     }
@@ -152,7 +157,7 @@ struct AssignmentsView: View {
                         }
 
                         // All caught up
-                        if filter == .all && overdueAssignments.isEmpty && upcomingAssignments.isEmpty && !isLoading {
+                        if filter == .all && overdueItems.isEmpty && upcomingItems.isEmpty && !isLoading {
                             VStack(spacing: 12) {
                                 IconBadge(systemImage: "checkmark.seal.fill", tint: .green, size: 56, cornerRadius: 14)
 
@@ -249,7 +254,7 @@ private struct AssignmentSection<Content: View>: View {
                 Spacer()
             }
 
-            VStack(alignment: .leading, spacing: 0) {
+            LazyVStack(alignment: .leading, spacing: 0) {
                 content
             }
             .appCard(padding: 14)

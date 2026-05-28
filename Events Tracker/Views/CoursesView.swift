@@ -871,6 +871,8 @@ private struct CourseModulesContent: View {
     }
 
     var body: some View {
+        let modulesToShow = visibleModules
+
         HStack {
             Text("Modules")
                 .font(.title2.weight(.semibold))
@@ -889,7 +891,7 @@ private struct CourseModulesContent: View {
             searchQuery: $searchQuery,
             filter: $filter,
             sort: $sort,
-            shownCount: visibleModules.count,
+            shownCount: modulesToShow.count,
             totalCount: modules.count
         )
 
@@ -902,14 +904,14 @@ private struct CourseModulesContent: View {
                 title: "No Modules Yet",
                 message: "If this course uses Canvas Modules, they will appear here after loading."
             )
-        } else if visibleModules.isEmpty {
+        } else if modulesToShow.isEmpty {
             SetupPromptView(
                 title: "No Matching Modules",
                 message: "Change the search, filter, or sort controls to review more course modules."
             )
         } else {
-            VStack(alignment: .leading, spacing: 16) {
-                ForEach(visibleModules) { module in
+            LazyVStack(alignment: .leading, spacing: 16) {
+                ForEach(modulesToShow) { module in
                     CourseModuleCard(module: module, onOpenNativeDetail: onOpenNativeDetail)
                 }
             }
@@ -976,6 +978,9 @@ private struct CourseAnnouncementsContent: View {
     }
 
     var body: some View {
+        let announcementsToShow = visibleAnnouncements
+        let lastAnnouncementID = announcementsToShow.last?.id
+
         Group {
             HStack {
                 Text("Announcements")
@@ -1022,7 +1027,7 @@ private struct CourseAnnouncementsContent: View {
                 searchQuery: $searchQuery,
                 filter: $filter,
                 sort: $sort,
-                shownCount: visibleAnnouncements.count,
+                shownCount: announcementsToShow.count,
                 totalCount: announcements.count
             )
 
@@ -1035,14 +1040,14 @@ private struct CourseAnnouncementsContent: View {
                     title: "No Announcements Yet",
                     message: "Canvas has not returned announcements for this course."
                 )
-            } else if visibleAnnouncements.isEmpty {
+            } else if announcementsToShow.isEmpty {
                 SetupPromptView(
                     title: "No Matching Announcements",
                     message: "Change the search, filter, or sort controls to review more announcements."
                 )
             } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(visibleAnnouncements) { announcement in
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(announcementsToShow) { announcement in
                         CourseAnnouncementRow(announcement: announcement) {
                             selectedAnnouncement = announcement
                         }
@@ -1051,7 +1056,7 @@ private struct CourseAnnouncementsContent: View {
                             selectedAnnouncement = announcement
                         }
 
-                        if announcement.id != visibleAnnouncements.last?.id {
+                        if announcement.id != lastAnnouncementID {
                             Divider()
                         }
                     }
@@ -1430,6 +1435,13 @@ private struct CourseFilesContent: View {
     }
 
     var body: some View {
+        let foldersToShow = visibleFolders
+        let filesToShow = visibleFiles
+        let selectedFilesSnapshot = selectedFiles
+        let selectedFolderSnapshot = selectedFolder
+        let lastFolderID = foldersToShow.last?.id
+        let lastFileID = filesToShow.last?.id
+
         HStack {
             Text("Files")
                 .font(.title2.weight(.semibold))
@@ -1464,8 +1476,8 @@ private struct CourseFilesContent: View {
 
             SummaryCard(
                 title: "Selected",
-                value: selectedFolder?.filesCount.map { "\($0)" } ?? "\(selectedFiles.count)",
-                detail: selectedFolder?.displayName ?? "Choose a folder to review files.",
+                value: selectedFolderSnapshot?.filesCount.map { "\($0)" } ?? "\(selectedFilesSnapshot.count)",
+                detail: selectedFolderSnapshot?.displayName ?? "Choose a folder to review files.",
                 systemImage: "folder.badge.gearshape",
                 tint: .teal
             )
@@ -1476,8 +1488,8 @@ private struct CourseFilesContent: View {
             searchQuery: $searchQuery,
             filter: $filter,
             sort: $sort,
-            shownCount: visibleFiles.count,
-            totalCount: selectedFiles.count
+            shownCount: filesToShow.count,
+            totalCount: selectedFilesSnapshot.count
         )
 
         if isLoadingFolders && folders.isEmpty {
@@ -1489,7 +1501,7 @@ private struct CourseFilesContent: View {
                 title: "No Files Yet",
                 message: "Canvas has not returned any visible folders for this course."
             )
-        } else if visibleFolders.isEmpty {
+        } else if foldersToShow.isEmpty {
             SetupPromptView(
                 title: "No Matching Folders",
                 message: "Change the search text to review more course folders."
@@ -1500,14 +1512,20 @@ private struct CourseFilesContent: View {
                     Text("Folders")
                         .font(.headline)
 
-                    ForEach(visibleFolders) { folder in
-                        CourseFolderRow(
-                            folder: folder,
-                            isSelected: folder.id == selectedFolder?.id
-                        ) {
-                            selectedFolderID = folder.id
-                            Task {
-                                await store.loadFilesIfNeeded(for: folder.id)
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(foldersToShow) { folder in
+                            CourseFolderRow(
+                                folder: folder,
+                                isSelected: folder.id == selectedFolderSnapshot?.id
+                            ) {
+                                selectedFolderID = folder.id
+                                Task {
+                                    await store.loadFilesIfNeeded(for: folder.id)
+                                }
+                            }
+
+                            if folder.id != lastFolderID {
+                                Divider()
                             }
                         }
                     }
@@ -1518,11 +1536,11 @@ private struct CourseFilesContent: View {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(selectedFolder?.displayName ?? "Files")
+                            Text(selectedFolderSnapshot?.displayName ?? "Files")
                                 .font(.headline)
 
-                            if let selectedFolder {
-                                Text(selectedFolder.itemCountDescription)
+                            if let selectedFolderSnapshot {
+                                Text(selectedFolderSnapshot.itemCountDescription)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -1530,10 +1548,10 @@ private struct CourseFilesContent: View {
 
                         Spacer()
 
-                        if let selectedFolder {
+                        if let selectedFolderSnapshot {
                             Button("Refresh Folder") {
                                 Task {
-                                    await store.loadFiles(for: selectedFolder.id)
+                                    await store.loadFiles(for: selectedFolderSnapshot.id)
                                 }
                             }
                             .disabled(isLoadingSelectedFiles)
@@ -1544,26 +1562,26 @@ private struct CourseFilesContent: View {
                         PillBadge(text: "\(unavailableFileCount) locked or hidden", tint: .orange)
                     }
 
-                    if isLoadingSelectedFiles && selectedFiles.isEmpty {
+                    if isLoadingSelectedFiles && selectedFilesSnapshot.isEmpty {
                         ProgressView("Loading files...")
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.vertical, 24)
-                    } else if selectedFiles.isEmpty {
+                    } else if selectedFilesSnapshot.isEmpty {
                         SetupPromptView(
                             title: "Folder Is Empty",
                             message: "Canvas did not return any visible files for this folder."
                         )
-                    } else if visibleFiles.isEmpty {
+                    } else if filesToShow.isEmpty {
                         SetupPromptView(
                             title: "No Matching Files",
                             message: "Change the search, filter, or sort controls to review more files."
                         )
                     } else {
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(visibleFiles) { file in
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(filesToShow) { file in
                                 CourseFileRow(file: file, courseID: course.id)
 
-                                if file.id != visibleFiles.last?.id {
+                                if file.id != lastFileID {
                                     Divider()
                                 }
                             }
@@ -1791,6 +1809,9 @@ private struct CourseAssignmentsContent: View {
     }
 
     var body: some View {
+        let assignmentsToShow = filteredAssignments
+        let lastAssignmentID = assignmentsToShow.last?.id
+
         Group {
             HStack {
                 Text("Assignments")
@@ -1844,7 +1865,7 @@ private struct CourseAssignmentsContent: View {
                 searchQuery: $searchQuery,
                 filter: $filter,
                 sort: $sort,
-                shownCount: filteredAssignments.count,
+                shownCount: assignmentsToShow.count,
                 totalCount: assignments.count
             )
 
@@ -1857,21 +1878,21 @@ private struct CourseAssignmentsContent: View {
                     title: "No Assignments Yet",
                     message: "Canvas has not returned any assignments for this course."
                 )
-            } else if filteredAssignments.isEmpty {
+            } else if assignmentsToShow.isEmpty {
                 SetupPromptView(
                     title: "No Matching Work",
                     message: "Change the search, filter, or sort controls to review a different slice of this course."
                 )
             } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(filteredAssignments) { assignment in
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(assignmentsToShow) { assignment in
                         CourseAssignmentRow(assignment: assignment, courseName: course.name)
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 selectedAssignment = assignment
                             }
 
-                        if assignment.id != filteredAssignments.last?.id {
+                        if assignment.id != lastAssignmentID {
                             Divider()
                         }
                     }
@@ -1998,6 +2019,11 @@ private struct CourseGradesContent: View {
     }
 
     var body: some View {
+        let gradedAssignmentsToShow = gradedAssignments
+        let allGradedAssignmentsToShow = allGradedAssignments
+        let recentScores = Array(gradedAssignmentsToShow.prefix(10))
+        let lastRecentScoreID = recentScores.last?.id
+
         Group {
             HStack {
                 Text("Grades")
@@ -2031,7 +2057,7 @@ private struct CourseGradesContent: View {
 
                 SummaryCard(
                     title: "Graded Items",
-                    value: "\(allGradedAssignments.count)",
+                    value: "\(allGradedAssignmentsToShow.count)",
                     detail: "Assignments with posted scores or grades.",
                     systemImage: "checkmark.circle",
                     tint: .orange
@@ -2061,20 +2087,20 @@ private struct CourseGradesContent: View {
                 searchPrompt: "Search graded assignments",
                 searchQuery: $searchQuery,
                 sort: $sort,
-                shownCount: gradedAssignments.count,
-                totalCount: allGradedAssignments.count
+                shownCount: gradedAssignmentsToShow.count,
+                totalCount: allGradedAssignmentsToShow.count
             )
 
             if isLoading && assignments.isEmpty {
                 ProgressView("Loading grades...")
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 24)
-            } else if allGradedAssignments.isEmpty {
+            } else if allGradedAssignmentsToShow.isEmpty {
                 SetupPromptView(
                     title: "No Grades Posted",
                     message: "Canvas has not returned any graded assignments for this course yet."
                 )
-            } else if gradedAssignments.isEmpty {
+            } else if gradedAssignmentsToShow.isEmpty {
                 SetupPromptView(
                     title: "No Matching Scores",
                     message: "Change the search or sort controls to review more graded assignments."
@@ -2084,14 +2110,14 @@ private struct CourseGradesContent: View {
                     Text("Recent Scores")
                         .font(.title2.weight(.semibold))
 
-                    ForEach(gradedAssignments.prefix(10)) { assignment in
+                    ForEach(recentScores) { assignment in
                         CourseAssignmentRow(assignment: assignment, courseName: course.name)
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 selectedAssignment = assignment
                             }
 
-                        if assignment.id != gradedAssignments.prefix(10).last?.id {
+                        if assignment.id != lastRecentScoreID {
                             Divider()
                         }
                     }

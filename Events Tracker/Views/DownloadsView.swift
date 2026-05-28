@@ -64,6 +64,9 @@ struct DownloadsView: View {
     }
 
     var body: some View {
+        let recordsToShow = visibleRecords
+        let lastRecordID = recordsToShow.last?.id
+
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 ScreenHeader(
@@ -118,17 +121,17 @@ struct DownloadsView: View {
                         title: "No Downloads Yet",
                         message: "Files you download will appear here. Use Sync Center to plan downloads."
                     )
-                } else if visibleRecords.isEmpty {
+                } else if recordsToShow.isEmpty {
                     SetupPromptView(
                         title: "No Matching Downloads",
                         message: "Change the search, course, type, or status filters."
                     )
                 } else {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(visibleRecords) { record in
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(recordsToShow) { record in
                             DownloadRecordRow(record: record, onPreview: previewRecord)
 
-                            if record.id != visibleRecords.last?.id {
+                            if record.id != lastRecordID {
                                 Divider()
                             }
                         }
