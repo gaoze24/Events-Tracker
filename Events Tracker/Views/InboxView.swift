@@ -79,7 +79,7 @@ struct InboxView: View {
                     .disabled(!store.isConfigured || store.loadingInbox)
                 }
 
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
+                LazyVGrid(columns: .metricCardColumns(), spacing: 12) {
                     SummaryCard(title: "Messages", value: "\(conversations.count)", detail: "Loaded Canvas conversations.", systemImage: "tray", tint: .blue)
                     SummaryCard(title: "Unread", value: "\(conversations.filter(\.isUnread).count)", detail: "Need attention.", systemImage: "envelope.badge", tint: .orange)
                     SummaryCard(title: "Archived", value: "\(conversations.filter(\.isArchived).count)", detail: "Moved out of the active inbox.", systemImage: "archivebox", tint: .secondary)

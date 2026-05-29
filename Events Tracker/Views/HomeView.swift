@@ -127,15 +127,7 @@ struct HomeView: View {
     }
 
     private func metrics(_ state: HomeDashboardDisplayState) -> some View {
-        LazyVGrid(
-            columns: [
-                GridItem(.flexible(), spacing: 12),
-                GridItem(.flexible(), spacing: 12),
-                GridItem(.flexible(), spacing: 12),
-                GridItem(.flexible(), spacing: 12)
-            ],
-            spacing: 12
-        ) {
+        LazyVGrid(columns: .metricCardColumns(), spacing: 12) {
             MetricCard(
                 title: "Courses",
                 value: selectedCourseID == nil ? "\(store.courses.count)" : "1",

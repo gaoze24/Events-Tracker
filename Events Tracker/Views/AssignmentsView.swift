@@ -78,14 +78,7 @@ struct AssignmentsView: View {
                         EmptyView()
                     }
 
-                    LazyVGrid(
-                        columns: [
-                            GridItem(.flexible(), spacing: 12),
-                            GridItem(.flexible(), spacing: 12),
-                            GridItem(.flexible(), spacing: 12)
-                        ],
-                        spacing: 12
-                    ) {
+                    LazyVGrid(columns: .metricCardColumns(), spacing: 12) {
                         MetricCard(
                             title: "Overdue",
                             value: "\(overdueItems.count)",

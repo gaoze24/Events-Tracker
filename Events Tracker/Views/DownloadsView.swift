@@ -80,7 +80,7 @@ struct DownloadsView: View {
                     .disabled(store.fileDownloadSnapshot.downloadedRecords.isEmpty)
                 }
 
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
+                LazyVGrid(columns: .metricCardColumns(), spacing: 12) {
                     SummaryCard(
                         title: "Downloaded",
                         value: "\(downloadedCount)",

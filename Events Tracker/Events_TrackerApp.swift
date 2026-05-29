@@ -7,6 +7,13 @@
 
 import SwiftUI
 
+/// Hard limits on how small the main window may be scaled before the layout
+/// (dashboard stat cards, sidebar, multi-column content) starts breaking.
+enum AppWindowMetrics {
+    static let minWidth: CGFloat = 960
+    static let minHeight: CGFloat = 640
+}
+
 private enum AppLaunchMode {
     static let uiTestArgument = "--ui-testing"
 
@@ -37,6 +44,10 @@ struct Events_TrackerApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(store)
+                .frame(
+                    minWidth: AppWindowMetrics.minWidth,
+                    minHeight: AppWindowMetrics.minHeight
+                )
                 .task {
                     guard launchMode == .normal else {
                         return
@@ -49,5 +60,6 @@ struct Events_TrackerApp: App {
                 }
         }
         .defaultSize(width: 1160, height: 860)
+        .windowResizability(.contentMinSize)
     }
 }

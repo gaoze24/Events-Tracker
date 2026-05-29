@@ -93,10 +93,7 @@ struct CoursePeopleContent: View {
     @State private var sort: CoursePeopleSort = .role
     @State private var selectedPerson: CoursePerson?
 
-    private let summaryColumns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
-    ]
+    private let summaryColumns: [GridItem] = .metricCardColumns(minimum: 220)
 
     var body: some View {
         let preparedPeople = people.map { person in

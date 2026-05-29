@@ -150,6 +150,49 @@ private enum CourseAnnouncementSort: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// Horizontally scrollable segmented control for the course workspace tabs.
+/// Unlike a native `.segmented` picker, this never forces an intrinsic minimum
+/// width on its parent: it fills the available width when the tabs fit and
+/// scrolls when space is tight, so the course detail never overflows the window.
+private struct CourseWorkspacePicker: View {
+    @Binding var selection: CourseWorkspaceSection
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 2) {
+                ForEach(CourseWorkspaceSection.allCases) { section in
+                    let isSelected = selection == section
+
+                    Button {
+                        selection = section
+                    } label: {
+                        Text(section.rawValue)
+                            .font(.callout.weight(isSelected ? .semibold : .regular))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .fill(isSelected ? Color.accentColor : Color.clear)
+                            )
+                            .foregroundStyle(isSelected ? Color.white : Color.primary)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(3)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(Color.subtleBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(Color.cardBorder, lineWidth: 1)
+        )
+    }
+}
+
 struct CoursesView: View {
     @EnvironmentObject private var store: CanvasStore
     @State private var selectedSection: CourseWorkspaceSection = .overview
@@ -284,7 +327,7 @@ struct CoursesView: View {
                             .tag(Optional(course.id))
                     }
                 }
-                .frame(minWidth: 260, idealWidth: 280, maxWidth: 320)
+                .frame(minWidth: 220, idealWidth: 280, maxWidth: 320)
 
                 Divider()
 
@@ -346,14 +389,8 @@ struct CoursesView: View {
                                 }
                             }
 
-                            Picker("Workspace", selection: $selectedSection) {
-                                ForEach(CourseWorkspaceSection.allCases) { section in
-                                    Text(section.rawValue)
-                                        .tag(section)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .frame(maxWidth: 760)
+                            CourseWorkspacePicker(selection: $selectedSection)
+                                .frame(maxWidth: 760)
 
                             switch selectedSection {
                             case .overview:
@@ -583,11 +620,7 @@ private struct CourseOverviewContent: View {
     let upcomingItems: [UpcomingEvent]
     let missingItems: [MissingSubmission]
 
-    private let summaryColumns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
-    ]
+    private let summaryColumns: [GridItem] = .metricCardColumns()
 
     private var nextDeadline: UpcomingEvent? {
         upcomingItems.first(where: { event in
@@ -948,11 +981,7 @@ private struct CourseAnnouncementsContent: View {
 
     @State private var selectedAnnouncement: CourseAnnouncement?
 
-    private let summaryColumns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
-    ]
+    private let summaryColumns: [GridItem] = .metricCardColumns()
 
     private var visibleAnnouncements: [CourseAnnouncement] {
         let filteredAnnouncements = announcements
@@ -1348,11 +1377,7 @@ private struct CourseFilesContent: View {
 
     @State private var selectedFolderID: Int?
 
-    private let summaryColumns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
-    ]
+    private let summaryColumns: [GridItem] = .metricCardColumns()
 
     private var selectedFolder: CanvasFolder? {
         if let selectedFolderID,
@@ -1760,10 +1785,7 @@ private struct CourseAssignmentsContent: View {
 
     @State private var selectedAssignment: CourseAssignment?
 
-    private let summaryColumns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
-    ]
+    private let summaryColumns: [GridItem] = .metricCardColumns(minimum: 220)
 
     private var filteredAssignments: [CourseAssignment] {
         let filteredAssignments = assignments
@@ -1933,10 +1955,7 @@ private struct CourseGradesContent: View {
 
     @State private var selectedAssignment: CourseAssignment?
 
-    private let summaryColumns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
-    ]
+    private let summaryColumns: [GridItem] = .metricCardColumns(minimum: 220)
 
     private var enrollment: CourseEnrollment? {
         course.studentEnrollment

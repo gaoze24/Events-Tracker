@@ -91,6 +91,16 @@ extension View {
     }
 }
 
+extension Array where Element == GridItem {
+    /// Responsive columns for metric/summary card grids. Cards keep a readable
+    /// minimum width and wrap to fewer columns automatically when space is
+    /// tight, so dense card rows never truncate their labels or crush their
+    /// detail text on narrow windows.
+    static func metricCardColumns(minimum: CGFloat = 200, spacing: CGFloat = 12) -> [GridItem] {
+        [GridItem(.adaptive(minimum: minimum, maximum: .infinity), spacing: spacing)]
+    }
+}
+
 extension Color {
     /// Consistent card surface that adapts to light/dark mode.
     static let cardBackground = Color.primary.opacity(0.05)
@@ -159,120 +169,29 @@ struct MetricCard: View {
                     .foregroundStyle(.secondary)
                     .textCase(.uppercase)
                     .kerning(0.6)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
 
-                TruncatableText(value, minimumScaleFactor: 0.7) {
-                    $0.font(.system(size: 26, weight: .semibold, design: .rounded))
-                }
-                .foregroundStyle(.primary)
+                Text(value)
+                    .font(.system(size: 26, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.6)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 if let detail, !detail.isEmpty {
-                    TruncatableText(detail) {
-                        $0.font(.caption)
-                    }
-                    .foregroundStyle(.secondary)
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+
+                Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .appCard(padding: 16)
-    }
-}
-
-/// A `Text`-equivalent that draws on a single line and automatically reveals
-/// a hover tooltip with the full content when the rendered text has been
-/// truncated. When the string fits within the available width (or scales down
-/// to fit via `minimumScaleFactor`), no tooltip is shown.
-///
-/// Pass any `Text`-only styling (font, weight, kerning, etc.) through the
-/// `style` closure so the hidden measurement copy matches the rendered text
-/// exactly. Apply view-level styling (foreground style, padding, etc.) on the
-/// returned view as usual.
-struct TruncatableText: View {
-    private let text: String
-    private let style: (Text) -> Text
-    private let minimumScaleFactor: CGFloat
-
-    @State private var isTruncated = false
-
-    init(
-        _ text: String,
-        minimumScaleFactor: CGFloat = 1,
-        style: @escaping (Text) -> Text = { $0 }
-    ) {
-        self.text = text
-        self.minimumScaleFactor = minimumScaleFactor
-        self.style = style
-    }
-
-    var body: some View {
-        let styled = style(Text(text))
-
-        return styled
-            .lineLimit(1)
-            .minimumScaleFactor(minimumScaleFactor)
-            .background(measurementOverlay(styled: styled))
-            .truncationHelp(text: text, isActive: isTruncated)
-    }
-
-    private func measurementOverlay(styled: Text) -> some View {
-        GeometryReader { visibleProxy in
-            styled
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-                .hidden()
-                .background(
-                    GeometryReader { fullProxy in
-                        Color.clear
-                            .preference(
-                                key: TruncationWidthsKey.self,
-                                value: TruncationWidths(
-                                    visible: visibleProxy.size.width,
-                                    full: fullProxy.size.width
-                                )
-                            )
-                    }
-                )
-        }
-        .onPreferenceChange(TruncationWidthsKey.self) { widths in
-            updateTruncation(for: widths)
-        }
-    }
-
-    private func updateTruncation(for widths: TruncationWidths) {
-        let scale = max(minimumScaleFactor, 0.01)
-        let truncated = widths.full > (widths.visible / scale) + 0.5
-        guard isTruncated != truncated else {
-            return
-        }
-
-        isTruncated = truncated
-    }
-}
-
-private extension View {
-    @ViewBuilder
-    func truncationHelp(text: String, isActive: Bool) -> some View {
-        if isActive {
-            self.help(text)
-        } else {
-            self
-        }
-    }
-}
-
-private struct TruncationWidths: Equatable {
-    var visible: CGFloat
-    var full: CGFloat
-}
-
-private struct TruncationWidthsKey: PreferenceKey {
-    static var defaultValue: TruncationWidths {
-        TruncationWidths(visible: 0, full: 0)
-    }
-
-    static func reduce(value: inout TruncationWidths, nextValue: () -> TruncationWidths) {
-        value = nextValue()
     }
 }
 

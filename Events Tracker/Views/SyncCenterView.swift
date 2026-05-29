@@ -51,7 +51,7 @@ struct SyncCenterView: View {
     }
 
     private var summaryCards: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
+        LazyVGrid(columns: .metricCardColumns(), spacing: 12) {
             SummaryCard(
                 title: "Dashboard",
                 value: inventory.lastDashboardSync.map { DisplayFormatters.relativeFormatter.localizedString(for: $0, relativeTo: Date()) } ?? "Never",
@@ -336,7 +336,7 @@ private struct OfflineDownloadPlannerView: View {
     }
 
     private var plannerSummary: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
+        LazyVGrid(columns: .metricCardColumns(), spacing: 12) {
             OfflinePlannerSummaryCard(
                 title: "Selected",
                 value: "\(plan.fileCount)",
