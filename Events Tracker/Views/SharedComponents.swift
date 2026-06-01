@@ -66,6 +66,7 @@ enum DisplayFormatters {
 }
 
 struct SetupPromptView: View {
+    @Environment(\.appUIStyle) private var style
     let title: String
     let message: String
     var systemImage: String = "link.badge.plus"
@@ -74,19 +75,33 @@ struct SetupPromptView: View {
     var body: some View {
         VStack(spacing: 18) {
             ZStack {
+                if style.isVivid {
+                    Circle()
+                        .fill(tint.opacity(0.18))
+                        .frame(width: 124, height: 124)
+                        .blur(radius: 22)
+                }
+
                 Circle()
                     .fill(
                         LinearGradient(
-                            colors: [tint.opacity(0.22), tint.opacity(0.08)],
+                            colors: style.isVivid
+                                ? [tint.opacity(0.30), tint.opacity(0.10)]
+                                : [tint.opacity(0.22), tint.opacity(0.08)],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
+                    )
+                    .overlay(
+                        Circle()
+                            .strokeBorder(tint.opacity(style.isVivid ? 0.30 : 0), lineWidth: 1)
                     )
                     .frame(width: 96, height: 96)
 
                 Image(systemName: systemImage)
                     .font(.system(size: 38, weight: .medium))
                     .foregroundStyle(tint)
+                    .shadow(color: tint.opacity(style.isVivid ? 0.4 : 0), radius: 6, x: 0, y: 2)
             }
 
             VStack(spacing: 6) {
@@ -124,25 +139,40 @@ struct SummaryCard: View {
 }
 
 struct PillBadge: View {
+    @Environment(\.appUIStyle) private var style
     let text: String
     let tint: Color
 
     var body: some View {
         Text(text)
-            .font(.caption2.weight(.semibold))
+            .font(.caption2.weight(style.isVivid ? .bold : .semibold))
             .textCase(.uppercase)
             .kerning(0.4)
             .padding(.horizontal, 9)
             .padding(.vertical, 4)
-            .background(
-                Capsule()
-                    .fill(tint.opacity(0.15))
-            )
+            .background(fill)
             .overlay(
                 Capsule()
-                    .strokeBorder(tint.opacity(0.25), lineWidth: 0.5)
+                    .strokeBorder(tint.opacity(style.isVivid ? 0.35 : 0.25), lineWidth: style.isVivid ? 0.6 : 0.5)
             )
             .foregroundStyle(tint)
+    }
+
+    @ViewBuilder
+    private var fill: some View {
+        if style.isVivid {
+            Capsule()
+                .fill(
+                    LinearGradient(
+                        colors: [tint.opacity(0.22), tint.opacity(0.12)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        } else {
+            Capsule()
+                .fill(tint.opacity(0.15))
+        }
     }
 }
 
