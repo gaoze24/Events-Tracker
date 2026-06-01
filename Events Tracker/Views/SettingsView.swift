@@ -51,6 +51,7 @@ struct TelegramChatSelectionState {
 
 struct SettingsView: View {
     @EnvironmentObject private var store: CanvasStore
+    @AppStorage(AppUIStyle.storageKey) private var appUIStyleRaw = AppUIStyle.vivid.rawValue
 
     @State private var baseURL = ""
     @State private var token = ""
@@ -79,6 +80,18 @@ struct SettingsView: View {
                 )
 
                 Form {
+                    Section("Appearance") {
+                        Picker("Interface style", selection: $appUIStyleRaw) {
+                            ForEach(AppUIStyle.allCases) { uiStyle in
+                                Text(uiStyle.label).tag(uiStyle.rawValue)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        Text("Vivid adds gradients, glowing icons, and an ambient backdrop. Classic uses a flat, minimal look that is lighter on performance.")
+                            .foregroundStyle(.secondary)
+                    }
+
                     Section("Canvas Connection") {
                         TextField("https://school.instructure.com", text: $baseURL)
                             .textFieldStyle(.roundedBorder)
@@ -222,6 +235,7 @@ struct SettingsView: View {
                     }
                 }
                 .formStyle(.grouped)
+                .scrollContentBackground(.hidden)
             }
             .padding(24)
         }

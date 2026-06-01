@@ -94,6 +94,11 @@ private enum AppSectionGroup: String, CaseIterable, Identifiable {
 struct ContentView: View {
     @EnvironmentObject private var store: CanvasStore
     @State private var selectedSection: AppSection? = .dashboard
+    @AppStorage(AppUIStyle.storageKey) private var appUIStyleRaw = AppUIStyle.vivid.rawValue
+
+    private var appUIStyle: AppUIStyle {
+        AppUIStyle(rawValue: appUIStyleRaw) ?? .vivid
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -176,6 +181,7 @@ struct ContentView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .auroraBackdrop()
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -208,28 +214,39 @@ struct ContentView: View {
                 }
             }
         }
+        .environment(\.appUIStyle, appUIStyle)
     }
 
     private var sidebarHeader: some View {
         HStack(spacing: 12) {
             ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: appUIStyle.isVivid ? 11 : 10, style: .continuous)
                     .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.accentColor.opacity(0.85),
-                                Color.accentColor.opacity(0.55)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
+                        appUIStyle.isVivid
+                            ? AppTheme.brandGradient
+                            : LinearGradient(
+                                colors: [Color.accentColor.opacity(0.85), Color.accentColor.opacity(0.55)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
                     )
-                    .frame(width: 36, height: 36)
+                    .frame(width: appUIStyle.isVivid ? 38 : 36, height: appUIStyle.isVivid ? 38 : 36)
 
-                Image(systemName: "graduationcap.fill")
-                    .font(.system(size: 17, weight: .semibold))
+                if appUIStyle.isVivid {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.25), lineWidth: 0.5)
+                        .frame(width: 38, height: 38)
+                }
+
+                Image("AppLogo")
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: appUIStyle.isVivid ? 23 : 22, height: appUIStyle.isVivid ? 23 : 22)
                     .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(appUIStyle.isVivid ? 0.2 : 0), radius: 1, x: 0, y: 1)
             }
+            .shadow(color: Color.indigo.opacity(appUIStyle.isVivid ? 0.45 : 0), radius: 8, x: 0, y: 3)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text("Events Tracker")
@@ -248,10 +265,7 @@ struct ContentView: View {
     @ViewBuilder
     private func sidebarRow(for section: AppSection) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: section.systemImage)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(section.tint)
-                .frame(width: 20, height: 20)
+            sidebarIcon(for: section)
 
             Text(section.rawValue)
 
@@ -273,6 +287,33 @@ struct ContentView: View {
             }
         }
         .padding(.vertical, 1)
+    }
+
+    @ViewBuilder
+    private func sidebarIcon(for section: AppSection) -> some View {
+        if appUIStyle.isVivid {
+            ZStack {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [section.tint.opacity(0.95), section.tint.opacity(0.6)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+
+                Image(systemName: section.systemImage)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: 24, height: 24)
+            .shadow(color: section.tint.opacity(0.35), radius: 3, x: 0, y: 1)
+        } else {
+            Image(systemName: section.systemImage)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(section.tint)
+                .frame(width: 20, height: 20)
+        }
     }
 
     private struct SidebarBadge {
