@@ -1555,7 +1555,7 @@ private struct CourseFilesContent: View {
                         }
                     }
                 }
-                .frame(width: 280, alignment: .topLeading)
+                .frame(minWidth: 240, idealWidth: 280, maxWidth: 300, alignment: .topLeading)
                 .appCard(padding: 14)
 
                 VStack(alignment: .leading, spacing: 12) {
@@ -1705,6 +1705,34 @@ private struct CourseFileRow: View {
     }
 
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 12) {
+                fileInfo
+
+                Spacer(minLength: 12)
+
+                HStack(spacing: 8) {
+                    actionControls
+                }
+                .fixedSize()
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                fileInfo
+
+                FlowLayout(spacing: 8, lineSpacing: 8) {
+                    actionControls
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.vertical, 10)
+        .sheet(item: $previewItem) { item in
+            QuickLookPreviewSheet(item: item)
+        }
+    }
+
+    private var fileInfo: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: file.isUnavailable ? "lock.doc" : "doc")
                 .foregroundStyle(file.isUnavailable ? .orange : .blue)
@@ -1714,6 +1742,8 @@ private struct CourseFileRow: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(file.name)
                     .font(.headline)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
 
                 HStack(spacing: 12) {
                     if let sizeDescription = file.sizeDescription {
@@ -1732,35 +1762,66 @@ private struct CourseFileRow: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             }
+        }
+    }
 
-            Spacer()
+    @ViewBuilder
+    private var actionControls: some View {
+        if file.isUnavailable {
+            PillBadge(text: "Restricted", tint: .orange)
+        }
 
-            if file.isUnavailable {
-                PillBadge(text: "Restricted", tint: .orange)
-            }
+        if let record = store.downloadRecord(for: file) {
+            if record.state == .downloaded {
+                Button("Preview") {
+                    previewRecord(record)
+                }
+                .font(.caption.weight(.semibold))
 
-            if let record = store.downloadRecord(for: file) {
-                DownloadActions(record: record, onPreview: previewRecord)
+                Button("Open") {
+                    store.openDownloadedFile(record)
+                }
+                .font(.caption.weight(.semibold))
+
+                Button("Reveal") {
+                    store.revealDownloadedFile(record)
+                }
+                .font(.caption.weight(.semibold))
+
+                Button("Remove", role: .destructive) {
+                    store.removeDownloadedFile(record)
+                }
+                .font(.caption.weight(.semibold))
+            } else if record.state == .downloading {
+                ProgressView()
+                    .controlSize(.small)
             } else {
-                HStack(spacing: 8) {
-                    Button("Download") {
-                        Task {
-                            await store.downloadFile(file, courseID: courseID)
-                        }
-                    }
-                    .font(.caption.weight(.semibold))
-                    .disabled(file.isUnavailable)
-
-                    if let url = file.actionableURL {
-                        Link("Open", destination: url)
-                            .font(.caption.weight(.semibold))
+                Button(record.state == .failed ? "Retry" : "Download") {
+                    Task {
+                        await store.retryDownload(record)
                     }
                 }
+                .font(.caption.weight(.semibold))
+                .disabled(record.state == .downloading)
             }
-        }
-        .padding(.vertical, 10)
-        .sheet(item: $previewItem) { item in
-            QuickLookPreviewSheet(item: item)
+
+            if let url = file.actionableURL {
+                Link("Canvas", destination: url)
+                    .font(.caption.weight(.semibold))
+            }
+        } else {
+            Button("Download") {
+                Task {
+                    await store.downloadFile(file, courseID: courseID)
+                }
+            }
+            .font(.caption.weight(.semibold))
+            .disabled(file.isUnavailable)
+
+            if let url = file.actionableURL {
+                Link("Open", destination: url)
+                    .font(.caption.weight(.semibold))
+            }
         }
     }
 

@@ -9,8 +9,13 @@ import SwiftUI
 
 /// Hard limits on how small the main window may be scaled before the layout
 /// (dashboard stat cards, sidebar, multi-column content) starts breaking.
+///
+/// The Courses workspace is the widest screen: it nests the app sidebar, the
+/// course list, the folder column, and the file detail pane side by side. The
+/// minimum width must leave room for all four so the file rows and summary
+/// cards never get clipped off the right edge on the smallest allowed window.
 enum AppWindowMetrics {
-    static let minWidth: CGFloat = 960
+    static let minWidth: CGFloat = 1080
     static let minHeight: CGFloat = 640
 }
 
