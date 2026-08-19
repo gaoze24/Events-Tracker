@@ -54,20 +54,15 @@ struct InboxView: View {
     }
 
     var body: some View {
+        let conversationsToShow = visibleConversations
+        let lastConversationID = conversationsToShow.last?.id
+
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Inbox")
-                            .font(.largeTitle.weight(.semibold))
-
-                        Text("Review and lightly manage Canvas conversations without leaving the app.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Spacer()
-
+                ScreenHeader(
+                    title: "Inbox",
+                    subtitle: "Review and lightly manage Canvas conversations without leaving the app."
+                ) {
                     Button {
                         Task {
                             await store.refreshInboxConversations()
@@ -75,14 +70,16 @@ struct InboxView: View {
                     } label: {
                         if store.loadingInbox {
                             ProgressView()
+                                .controlSize(.small)
                         } else {
                             Label("Refresh", systemImage: "arrow.clockwise")
                         }
                     }
+                    .buttonStyle(.bordered)
                     .disabled(!store.isConfigured || store.loadingInbox)
                 }
 
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
+                LazyVGrid(columns: .metricCardColumns(), spacing: 12) {
                     SummaryCard(title: "Messages", value: "\(conversations.count)", detail: "Loaded Canvas conversations.", systemImage: "tray", tint: .blue)
                     SummaryCard(title: "Unread", value: "\(conversations.filter(\.isUnread).count)", detail: "Need attention.", systemImage: "envelope.badge", tint: .orange)
                     SummaryCard(title: "Archived", value: "\(conversations.filter(\.isArchived).count)", detail: "Moved out of the active inbox.", systemImage: "archivebox", tint: .secondary)
@@ -104,24 +101,22 @@ struct InboxView: View {
                         title: "No Conversations Loaded",
                         message: "Refresh Inbox to load recent Canvas conversations."
                     )
-                } else if visibleConversations.isEmpty {
+                } else if conversationsToShow.isEmpty {
                     SetupPromptView(
                         title: "No Matching Conversations",
                         message: "Change the search, course, or status filters."
                     )
                 } else {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(visibleConversations) { conversation in
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(conversationsToShow) { conversation in
                             InboxConversationRow(conversation: conversation)
 
-                            if conversation.id != visibleConversations.last?.id {
+                            if conversation.id != lastConversationID {
                                 Divider()
                             }
                         }
                     }
-                    .padding(16)
-                    .background(Color.primary.opacity(0.04))
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .appCard(padding: 16)
                 }
             }
             .padding(24)

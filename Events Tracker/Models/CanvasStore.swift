@@ -11,6 +11,91 @@ import Foundation
 
 @MainActor
 final class CanvasStore: ObservableObject {
+    enum BootstrapMode {
+        case normal
+        case uiTests
+    }
+
+    struct DashboardPriorityItem: Identifiable, Hashable {
+        enum Kind: Hashable {
+            case missing(MissingSubmission)
+            case upcoming(UpcomingEvent)
+        }
+
+        let kind: Kind
+        let score: Int
+
+        var id: String {
+            switch kind {
+            case .missing(let submission):
+                return "missing-\(submission.id)"
+            case .upcoming(let event):
+                return "event-\(event.id)"
+            }
+        }
+
+        var title: String {
+            switch kind {
+            case .missing(let submission):
+                return submission.name
+            case .upcoming(let event):
+                return event.title
+            }
+        }
+
+        var subtitle: String {
+            switch kind {
+            case .missing:
+                return "Missing Work"
+            case .upcoming(let event):
+                return event.kindLabel
+            }
+        }
+
+        var courseID: Int? {
+            switch kind {
+            case .missing(let submission):
+                return submission.courseID
+            case .upcoming(let event):
+                return event.courseID
+            }
+        }
+
+        var date: Date? {
+            switch kind {
+            case .missing(let submission):
+                return submission.dueAt
+            case .upcoming(let event):
+                return event.displayDate
+            }
+        }
+
+        var actionableURL: URL? {
+            switch kind {
+            case .missing(let submission):
+                return submission.htmlURL
+            case .upcoming(let event):
+                return event.actionableURL
+            }
+        }
+
+        var isMissing: Bool {
+            if case .missing = kind {
+                return true
+            }
+
+            return false
+        }
+
+        var isAssignmentBackedEvent: Bool {
+            if case .upcoming(let event) = kind {
+                return event.isAssignment
+            }
+
+            return false
+        }
+    }
+
     @Published var config: CanvasConfig
     @Published private(set) var courses: [Course]
     @Published private(set) var courseAssignmentsByCourseID: [Int: [CourseAssignment]]
@@ -59,6 +144,7 @@ final class CanvasStore: ObservableObject {
     private let now: () -> Date
     private var courseDetailAccessDates: [Int: Date]
     private var cacheMaintenanceTask: Task<Void, Never>?
+    private var autoSyncTask: Task<Void, Never>?
 
     init(
         configManager: CanvasConfigManager = .shared,
@@ -69,7 +155,8 @@ final class CanvasStore: ObservableObject {
         fileDownloadManager: FileDownloadManager = .shared,
         recentSearchManager: RecentSearchManager = .shared,
         cachePolicy: CanvasCachePolicy = .default,
-        now: @escaping () -> Date = Date.init
+        now: @escaping () -> Date = Date.init,
+        bootstrapMode: BootstrapMode = .normal
     ) {
         self.configManager = configManager
         self.databaseManager = databaseManager
@@ -82,14 +169,24 @@ final class CanvasStore: ObservableObject {
         self.now = now
         courseDetailAccessDates = [:]
 
-        let savedConfig = configManager.loadConfig()
+        let savedConfig: CanvasConfig
+        switch bootstrapMode {
+        case .normal:
+            savedConfig = configManager.loadConfig()
+            coursePreferences = preferenceManager.loadPreferences()
+            fileDownloadSnapshot = fileDownloadManager.loadSnapshot()
+            recentSearchTerms = recentSearchManager.loadTerms()
+        case .uiTests:
+            savedConfig = CanvasConfig()
+            coursePreferences = CoursePreferencesSnapshot()
+            fileDownloadSnapshot = FileDownloadSnapshot()
+            recentSearchTerms = []
+        }
+
         config = savedConfig
-        coursePreferences = preferenceManager.loadPreferences()
-        fileDownloadSnapshot = fileDownloadManager.loadSnapshot()
         downloadingFileIDs = []
         offlineBulkDownloadProgress = nil
         preloadingCourseIDs = []
-        recentSearchTerms = recentSearchManager.loadTerms()
         inboxConversations = []
         loadingInbox = false
         inboxLastLoadedAt = nil
@@ -99,47 +196,40 @@ final class CanvasStore: ObservableObject {
             telegramManager: .shared,
             historyManager: .shared
         )
+        courseAssignmentsByCourseID = [:]
+        loadingCourseAssignmentIDs = []
+        courseModulesByCourseID = [:]
+        loadingCourseModuleIDs = []
+        courseFoldersByCourseID = [:]
+        courseFilesByFolderID = [:]
+        loadingCourseFolderIDs = []
+        loadingFolderFileIDs = []
+        courseAnnouncementsByCourseID = [:]
+        loadingCourseAnnouncementIDs = []
+        courseSyllabusByCourseID = [:]
+        loadingCourseSyllabusIDs = []
+        coursePeopleByCourseID = [:]
+        loadingCoursePeopleIDs = []
+        moduleItemDetailsByKey = [:]
+        loadingModuleItemDetailKeys = []
 
-        if let snapshot = databaseManager.loadSnapshot() {
-            courses = snapshot.courses
-            courseAssignmentsByCourseID = [:]
-            loadingCourseAssignmentIDs = []
-            courseModulesByCourseID = [:]
-            loadingCourseModuleIDs = []
-            courseFoldersByCourseID = [:]
-            courseFilesByFolderID = [:]
-            loadingCourseFolderIDs = []
-            loadingFolderFileIDs = []
-            courseAnnouncementsByCourseID = [:]
-            loadingCourseAnnouncementIDs = []
-            courseSyllabusByCourseID = [:]
-            loadingCourseSyllabusIDs = []
-            coursePeopleByCourseID = [:]
-            loadingCoursePeopleIDs = []
-            moduleItemDetailsByKey = [:]
-            loadingModuleItemDetailKeys = []
-            upcomingEvents = snapshot.upcomingEvents
-            missingSubmissions = snapshot.missingSubmissions
-            profile = snapshot.profile
-            lastSyncedAt = snapshot.syncedAt
-        } else {
+        switch bootstrapMode {
+        case .normal:
+            if let snapshot = databaseManager.loadSnapshot() {
+                courses = snapshot.courses
+                upcomingEvents = snapshot.upcomingEvents
+                missingSubmissions = snapshot.missingSubmissions
+                profile = snapshot.profile
+                lastSyncedAt = snapshot.syncedAt
+            } else {
+                courses = []
+                upcomingEvents = []
+                missingSubmissions = []
+                profile = nil
+                lastSyncedAt = nil
+            }
+        case .uiTests:
             courses = []
-            courseAssignmentsByCourseID = [:]
-            loadingCourseAssignmentIDs = []
-            courseModulesByCourseID = [:]
-            loadingCourseModuleIDs = []
-            courseFoldersByCourseID = [:]
-            courseFilesByFolderID = [:]
-            loadingCourseFolderIDs = []
-            loadingFolderFileIDs = []
-            courseAnnouncementsByCourseID = [:]
-            loadingCourseAnnouncementIDs = []
-            courseSyllabusByCourseID = [:]
-            loadingCourseSyllabusIDs = []
-            coursePeopleByCourseID = [:]
-            loadingCoursePeopleIDs = []
-            moduleItemDetailsByKey = [:]
-            loadingModuleItemDetailKeys = []
             upcomingEvents = []
             missingSubmissions = []
             profile = nil
@@ -148,11 +238,15 @@ final class CanvasStore: ObservableObject {
 
         selectedCourseID = courses.first?.id
         relativeFormatter.unitsStyle = .full
-        restoreCourseDetailCache()
+
+        if bootstrapMode == .normal {
+            restoreCourseDetailCache()
+        }
     }
 
     deinit {
         cacheMaintenanceTask?.cancel()
+        autoSyncTask?.cancel()
     }
 
     var isConfigured: Bool {
@@ -265,13 +359,53 @@ final class CanvasStore: ObservableObject {
 
         do {
             let snapshot = try await networkManager.fetchDashboardSnapshot(using: config)
+            guard !Task.isCancelled else {
+                isSyncing = false
+                return
+            }
+
             applySnapshot(snapshot)
             try databaseManager.saveSnapshot(snapshot)
         } catch {
-            errorMessage = error.localizedDescription
+            if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                isSyncing = false
+                return
+            }
+
+            displayError(error)
         }
 
         isSyncing = false
+    }
+
+    func refreshDashboardAndCachedDetails() async {
+        let cachedCourseIDsToRefresh = cachedCourseDetailIDs
+        let offlinePriorityCourseIDsToRefresh = coursePreferences.offlinePriorityCourseIDs
+        let courseIDsToRefresh = cachedCourseIDsToRefresh.union(offlinePriorityCourseIDsToRefresh)
+
+        await refresh()
+
+        guard !Task.isCancelled, errorMessage == nil, !courseIDsToRefresh.isEmpty else {
+            return
+        }
+
+        isSyncing = true
+        defer {
+            isSyncing = false
+        }
+
+        let availableCourseIDs = Set(courses.map(\.id))
+        for courseID in courseIDsToRefresh.sorted() where availableCourseIDs.contains(courseID) {
+            guard !Task.isCancelled else {
+                return
+            }
+
+            if offlinePriorityCourseIDsToRefresh.contains(courseID) {
+                await preloadCourseMetadata(courseID: courseID)
+            } else {
+                await refreshCachedCourseMetadata(courseID: courseID)
+            }
+        }
     }
 
     @discardableResult
@@ -280,22 +414,35 @@ final class CanvasStore: ObservableObject {
         token: String,
         lookaheadDays: Int,
         telegramReminders: TelegramReminderConfig,
-        downloadCacheLimit: DownloadCacheLimitPreset = .unlimited
+        downloadCacheLimit: DownloadCacheLimitPreset = .unlimited,
+        autoSync: AutoSyncConfig? = nil
     ) throws -> Bool {
+        let nextAutoSync = autoSync ?? config.autoSync
+        let previousAutoSync = config.autoSync
         let updatedConfig = CanvasConfig(
             baseURL: baseURL,
             token: token,
             lookaheadDays: lookaheadDays,
             telegramReminders: telegramReminders,
-            downloadCacheLimit: downloadCacheLimit
+            downloadCacheLimit: downloadCacheLimit,
+            autoSync: nextAutoSync
         )
 
         let credentialsChanged = updatedConfig.normalizedBaseURL != config.normalizedBaseURL
             || updatedConfig.trimmedToken != config.trimmedToken
 
+        if credentialsChanged {
+            stopAutoSync()
+        }
+
         try configManager.saveConfig(updatedConfig)
         config = updatedConfig
         reminderService.updateConfig(updatedConfig)
+        restartAutoSyncIfNeeded(
+            previous: previousAutoSync,
+            current: updatedConfig.autoSync,
+            forceRestart: credentialsChanged
+        )
         errorMessage = nil
 
         if credentialsChanged {
@@ -330,7 +477,7 @@ final class CanvasStore: ObservableObject {
             loadingInbox = false
             inboxLastLoadedAt = nil
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 
@@ -461,11 +608,17 @@ final class CanvasStore: ObservableObject {
     }
 
     func filteredUpcomingEvents(courseID: Int?) -> [UpcomingEvent] {
-        guard let courseID else {
-            return upcomingEvents
+        let events: [UpcomingEvent]
+        let missing: [MissingSubmission]
+        if let courseID {
+            events = upcomingEvents.filter { $0.courseID == courseID }
+            missing = missingSubmissions.filter { $0.courseID == courseID }
+        } else {
+            events = upcomingEvents
+            missing = missingSubmissions
         }
 
-        return upcomingEvents.filter { $0.courseID == courseID }
+        return upcomingEventsExcludingMissingAssignments(events, missingSubmissions: missing)
     }
 
     func filteredMissingSubmissions(courseID: Int?) -> [MissingSubmission] {
@@ -474,6 +627,52 @@ final class CanvasStore: ObservableObject {
         }
 
         return missingSubmissions.filter { $0.courseID == courseID }
+    }
+
+    private func upcomingEventsExcludingMissingAssignments(
+        _ events: [UpcomingEvent],
+        missingSubmissions: [MissingSubmission]
+    ) -> [UpcomingEvent] {
+        let missingAssignmentIdentities = Set(missingSubmissions.map(\.assignmentIdentity))
+        return events.filter { event in
+            guard let assignmentIdentity = event.assignmentIdentity else {
+                return true
+            }
+
+            return !missingAssignmentIdentities.contains(assignmentIdentity)
+        }
+    }
+
+    func prioritizedMissingSubmissions(courseID: Int?) -> [MissingSubmission] {
+        filteredMissingSubmissions(courseID: courseID)
+            .sorted(by: priorityMissingSubmissionPrecedes)
+    }
+
+    func prioritizedUpcomingEvents(courseID: Int?) -> [UpcomingEvent] {
+        filteredUpcomingEvents(courseID: courseID)
+            .sorted(by: priorityUpcomingEventPrecedes)
+    }
+
+    func priorityNowItems(courseID: Int?, limit: Int = 3) -> [DashboardPriorityItem] {
+        let items = prioritizedMissingSubmissions(courseID: courseID).map {
+            DashboardPriorityItem(kind: .missing($0), score: priorityScore(for: $0))
+        } + prioritizedUpcomingEvents(courseID: courseID).compactMap { event in
+            let score = priorityScore(for: event)
+            guard score > 0 else {
+                return nil
+            }
+
+            return DashboardPriorityItem(kind: .upcoming(event), score: score)
+        }
+
+        return items
+            .sorted(by: priorityItemPrecedes)
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    func dashboardFocusItem(courseID: Int?) -> DashboardPriorityItem? {
+        priorityNowItems(courseID: courseID, limit: 1).first
     }
 
     func modules(for courseID: Int?) -> [CourseModule] {
@@ -903,7 +1102,7 @@ final class CanvasStore: ObservableObject {
             if let courseID = courseID(containingFolderID: folderID) {
                 handleCourseDetailLoadFailure(error, courseID: courseID)
             } else {
-                errorMessage = error.localizedDescription
+                displayError(error)
             }
         }
 
@@ -993,7 +1192,7 @@ final class CanvasStore: ObservableObject {
             fileDownloadSnapshot.updatedAt = now()
             persistFileDownloadSnapshot()
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 
@@ -1016,7 +1215,7 @@ final class CanvasStore: ObservableObject {
             fileDownloadSnapshot = snapshot
             persistFileDownloadSnapshot()
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 
@@ -1031,7 +1230,7 @@ final class CanvasStore: ObservableObject {
         do {
             try databaseManager.clearSnapshot()
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 
@@ -1041,7 +1240,7 @@ final class CanvasStore: ObservableObject {
         do {
             try detailCacheManager.clearCache()
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 
@@ -1079,7 +1278,11 @@ final class CanvasStore: ObservableObject {
         await loadCourseFiles(for: courseID)
 
         for folder in courseFoldersByCourseID[courseID] ?? [] {
-            await loadFilesIfNeeded(for: folder.id)
+            guard !Task.isCancelled else {
+                return
+            }
+
+            await loadFiles(for: folder.id)
         }
 
         await loadAnnouncements(for: courseID)
@@ -1087,11 +1290,84 @@ final class CanvasStore: ObservableObject {
         await loadPeople(for: courseID)
     }
 
+    private func refreshCachedCourseMetadata(courseID: Int) async {
+        guard config.isComplete, courses.contains(where: { $0.id == courseID }) else {
+            return
+        }
+
+        if courseAssignmentsByCourseID[courseID] != nil {
+            await loadAssignments(for: courseID)
+        }
+
+        if courseModulesByCourseID[courseID] != nil {
+            await loadModules(for: courseID)
+        }
+
+        let cachedFolderIDs = Set((courseFoldersByCourseID[courseID] ?? []).map(\.id))
+        if courseFoldersByCourseID[courseID] != nil {
+            await loadCourseFiles(for: courseID)
+        }
+
+        let currentFolderIDs = Set((courseFoldersByCourseID[courseID] ?? []).map(\.id))
+        for folderID in cachedFolderIDs.union(currentFolderIDs).sorted() {
+            if courseFilesByFolderID[folderID] != nil {
+                await loadFiles(for: folderID)
+            }
+        }
+
+        if courseAnnouncementsByCourseID[courseID] != nil {
+            await loadAnnouncements(for: courseID)
+        }
+
+        if courseSyllabusByCourseID[courseID] != nil {
+            await loadSyllabus(for: courseID)
+        }
+
+        if coursePeopleByCourseID[courseID] != nil {
+            await loadPeople(for: courseID)
+        }
+
+        await refreshCachedModuleItemDetails(courseID: courseID)
+    }
+
+    private func refreshCachedModuleItemDetails(courseID: Int) async {
+        let cachedKeys = Set(moduleItemDetailsByKey.keys.compactMap(CourseModuleItemDetailKey.init(rawValue:)))
+            .filter { $0.courseID == courseID }
+
+        guard !cachedKeys.isEmpty else {
+            return
+        }
+
+        if courseModulesByCourseID[courseID] == nil {
+            await loadModules(for: courseID)
+        }
+
+        let cachedItems = (courseModulesByCourseID[courseID] ?? [])
+            .flatMap { $0.items ?? [] }
+            .compactMap { item -> (CourseModuleItem, CourseModuleItemDetailKey)? in
+                guard let key = CourseModuleItemDetailKey.key(courseID: courseID, item: item),
+                      cachedKeys.contains(key)
+                else {
+                    return nil
+                }
+
+                return (item, key)
+            }
+
+        for (item, key) in cachedItems {
+            guard !Task.isCancelled else {
+                return
+            }
+
+            await loadModuleItemDetail(courseID: courseID, item: item, key: key)
+        }
+    }
+
     func globalSearchResults(for query: String) -> [GlobalSearchResult] {
         GlobalSearchIndex.results(
             query: query,
             courses: courses,
-            upcomingEvents: upcomingEvents,
+            upcomingEvents: filteredUpcomingEvents(courseID: nil),
             missingSubmissions: missingSubmissions,
             assignmentsByCourseID: courseAssignmentsByCourseID,
             modulesByCourseID: courseModulesByCourseID,
@@ -1121,7 +1397,7 @@ final class CanvasStore: ObservableObject {
         do {
             try recentSearchManager.clearTerms()
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 
@@ -1160,7 +1436,7 @@ final class CanvasStore: ObservableObject {
                 .sorted(by: sortInboxConversations)
             inboxLastLoadedAt = now()
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
 
         loadingInbox = false
@@ -1399,7 +1675,7 @@ final class CanvasStore: ObservableObject {
             markCourseDetailAccess(courseID)
             persistCourseDetailCache()
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
 
         loadingModuleItemDetailKeys.remove(key.rawValue)
@@ -1439,6 +1715,38 @@ final class CanvasStore: ObservableObject {
     func stopCacheMaintenance() {
         cacheMaintenanceTask?.cancel()
         cacheMaintenanceTask = nil
+    }
+
+    func startAutoSync() {
+        guard autoSyncTask == nil, config.isComplete, config.autoSync.isEnabled else {
+            return
+        }
+
+        autoSyncTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else {
+                    return
+                }
+
+                let minutes = self.config.autoSync.normalizedIntervalMinutes
+                try? await Task.sleep(nanoseconds: UInt64(minutes) * 60 * 1_000_000_000)
+
+                guard !Task.isCancelled else {
+                    return
+                }
+
+                guard self.config.isComplete, self.config.autoSync.isEnabled, !self.isSyncing else {
+                    continue
+                }
+
+                await self.refreshDashboardAndCachedDetails()
+            }
+        }
+    }
+
+    func stopAutoSync() {
+        autoSyncTask?.cancel()
+        autoSyncTask = nil
     }
 
     func pruneCourseDetailMemoryCache(referenceDate: Date? = nil) {
@@ -1531,12 +1839,33 @@ final class CanvasStore: ObservableObject {
     }
 
     private func handleCourseDetailLoadFailure(_ error: Error, courseID: Int) {
+        guard !isCancellation(error) else {
+            return
+        }
+
         if restoreCachedCourseDetails(for: courseID) {
             errorMessage = "Could not refresh Canvas. Showing cached data from offline storage."
             return
         }
 
+        displayError(error)
+    }
+
+    private func displayError(_ error: Error) {
+        guard !isCancellation(error) else {
+            return
+        }
+
         errorMessage = error.localizedDescription
+    }
+
+    private func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError {
+            return true
+        }
+
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
     }
 
     private func restoreCachedCourseDetails(for courseID: Int) -> Bool {
@@ -1561,7 +1890,7 @@ final class CanvasStore: ObservableObject {
         do {
             try detailCacheManager.saveCache(snapshot)
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 
@@ -1584,11 +1913,27 @@ final class CanvasStore: ObservableObject {
             .union(Set([selectedCourseID].compactMap { $0 }))
     }
 
+    private func restartAutoSyncIfNeeded(
+        previous: AutoSyncConfig,
+        current: AutoSyncConfig,
+        forceRestart: Bool = false
+    ) {
+        guard forceRestart || previous != current else {
+            if autoSyncTask == nil {
+                startAutoSync()
+            }
+            return
+        }
+
+        stopAutoSync()
+        startAutoSync()
+    }
+
     private func persistCoursePreferences() {
         do {
             try preferenceManager.savePreferences(coursePreferences)
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 
@@ -1699,7 +2044,7 @@ final class CanvasStore: ObservableObject {
                 inboxConversations.sort(by: sortInboxConversations)
             }
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 
@@ -1720,11 +2065,118 @@ final class CanvasStore: ObservableObject {
         return lhs.displaySubject.localizedCaseInsensitiveCompare(rhs.displaySubject) == .orderedAscending
     }
 
+    private func priorityMissingSubmissionPrecedes(_ lhs: MissingSubmission, _ rhs: MissingSubmission) -> Bool {
+        priorityItemPrecedes(
+            DashboardPriorityItem(kind: .missing(lhs), score: priorityScore(for: lhs)),
+            DashboardPriorityItem(kind: .missing(rhs), score: priorityScore(for: rhs))
+        )
+    }
+
+    private func priorityUpcomingEventPrecedes(_ lhs: UpcomingEvent, _ rhs: UpcomingEvent) -> Bool {
+        priorityItemPrecedes(
+            DashboardPriorityItem(kind: .upcoming(lhs), score: priorityScore(for: lhs)),
+            DashboardPriorityItem(kind: .upcoming(rhs), score: priorityScore(for: rhs))
+        )
+    }
+
+    private func priorityItemPrecedes(_ lhs: DashboardPriorityItem, _ rhs: DashboardPriorityItem) -> Bool {
+        if lhs.score != rhs.score {
+            return lhs.score > rhs.score
+        }
+
+        switch (lhs.date, rhs.date) {
+        case let (left?, right?):
+            if left != right {
+                return left < right
+            }
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        case (.none, .none):
+            break
+        }
+
+        if lhs.isMissing != rhs.isMissing {
+            return lhs.isMissing
+        }
+
+        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+    }
+
+    private func priorityScore(for submission: MissingSubmission) -> Int {
+        var score = 200
+
+        if let dueAt = submission.dueAt {
+            let day: TimeInterval = 24 * 60 * 60
+            let delta = dueAt.timeIntervalSince(now())
+
+            if delta < 0 {
+                let overdueDays = min(Int(abs(delta) / day), 14)
+                score += 80 + overdueDays * 6
+            } else if delta <= day {
+                score += 44
+            } else if delta <= 3 * day {
+                score += 28
+            } else if delta <= 7 * day {
+                score += 18
+            } else {
+                score += 8
+            }
+        } else {
+            score += 12
+        }
+
+        score += coursePriorityBonus(for: submission.courseID)
+        return score
+    }
+
+    private func priorityScore(for event: UpcomingEvent) -> Int {
+        guard let date = event.displayDate else {
+            return 0
+        }
+
+        let day: TimeInterval = 24 * 60 * 60
+        let delta = date.timeIntervalSince(now())
+        guard delta >= 0 else {
+            return event.isAssignment ? 34 + coursePriorityBonus(for: event.courseID) : 0
+        }
+
+        var score = event.isAssignment ? 118 : 82
+        if delta <= day {
+            score += 36
+        } else if delta <= 3 * day {
+            score += 24
+        } else if delta <= 7 * day {
+            score += 14
+        } else {
+            score += 6
+        }
+
+        score += coursePriorityBonus(for: event.courseID)
+        return score
+    }
+
+    private func coursePriorityBonus(for courseID: Int?) -> Int {
+        guard let courseID else {
+            return 0
+        }
+
+        var bonus = 0
+        if coursePreferences.pinnedCourseIDs.contains(courseID) {
+            bonus += 12
+        }
+        if coursePreferences.offlinePriorityCourseIDs.contains(courseID) {
+            bonus += 6
+        }
+        return bonus
+    }
+
     private func persistFileDownloadSnapshot() {
         do {
             try fileDownloadManager.saveSnapshot(fileDownloadSnapshot)
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 
@@ -1732,7 +2184,7 @@ final class CanvasStore: ObservableObject {
         do {
             try recentSearchManager.saveTerms(recentSearchTerms)
         } catch {
-            errorMessage = error.localizedDescription
+            displayError(error)
         }
     }
 

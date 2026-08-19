@@ -5,6 +5,7 @@
 //  Created by Codex on 13/4/26.
 //
 
+import AppKit
 import SwiftUI
 
 private enum CourseWorkspaceSection: String, CaseIterable, Identifiable {
@@ -149,6 +150,49 @@ private enum CourseAnnouncementSort: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// Horizontally scrollable segmented control for the course workspace tabs.
+/// Unlike a native `.segmented` picker, this never forces an intrinsic minimum
+/// width on its parent: it fills the available width when the tabs fit and
+/// scrolls when space is tight, so the course detail never overflows the window.
+private struct CourseWorkspacePicker: View {
+    @Binding var selection: CourseWorkspaceSection
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 2) {
+                ForEach(CourseWorkspaceSection.allCases) { section in
+                    let isSelected = selection == section
+
+                    Button {
+                        selection = section
+                    } label: {
+                        Text(section.rawValue)
+                            .font(.callout.weight(isSelected ? .semibold : .regular))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .fill(isSelected ? Color.accentColor : Color.clear)
+                            )
+                            .foregroundStyle(isSelected ? Color.white : Color.primary)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(3)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(Color.subtleBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(Color.cardBorder, lineWidth: 1)
+        )
+    }
+}
+
 struct CoursesView: View {
     @EnvironmentObject private var store: CanvasStore
     @State private var selectedSection: CourseWorkspaceSection = .overview
@@ -283,7 +327,7 @@ struct CoursesView: View {
                             .tag(Optional(course.id))
                     }
                 }
-                .frame(minWidth: 260, idealWidth: 280, maxWidth: 320)
+                .frame(minWidth: 220, idealWidth: 280, maxWidth: 320)
 
                 Divider()
 
@@ -345,14 +389,8 @@ struct CoursesView: View {
                                 }
                             }
 
-                            Picker("Workspace", selection: $selectedSection) {
-                                ForEach(CourseWorkspaceSection.allCases) { section in
-                                    Text(section.rawValue)
-                                        .tag(section)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .frame(maxWidth: 760)
+                            CourseWorkspacePicker(selection: $selectedSection)
+                                .frame(maxWidth: 760)
 
                             switch selectedSection {
                             case .overview:
@@ -582,11 +620,7 @@ private struct CourseOverviewContent: View {
     let upcomingItems: [UpcomingEvent]
     let missingItems: [MissingSubmission]
 
-    private let summaryColumns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
-    ]
+    private let summaryColumns: [GridItem] = .metricCardColumns()
 
     private var nextDeadline: UpcomingEvent? {
         upcomingItems.first(where: { event in
@@ -870,6 +904,8 @@ private struct CourseModulesContent: View {
     }
 
     var body: some View {
+        let modulesToShow = visibleModules
+
         HStack {
             Text("Modules")
                 .font(.title2.weight(.semibold))
@@ -888,7 +924,7 @@ private struct CourseModulesContent: View {
             searchQuery: $searchQuery,
             filter: $filter,
             sort: $sort,
-            shownCount: visibleModules.count,
+            shownCount: modulesToShow.count,
             totalCount: modules.count
         )
 
@@ -901,14 +937,14 @@ private struct CourseModulesContent: View {
                 title: "No Modules Yet",
                 message: "If this course uses Canvas Modules, they will appear here after loading."
             )
-        } else if visibleModules.isEmpty {
+        } else if modulesToShow.isEmpty {
             SetupPromptView(
                 title: "No Matching Modules",
                 message: "Change the search, filter, or sort controls to review more course modules."
             )
         } else {
-            VStack(alignment: .leading, spacing: 16) {
-                ForEach(visibleModules) { module in
+            LazyVStack(alignment: .leading, spacing: 16) {
+                ForEach(modulesToShow) { module in
                     CourseModuleCard(module: module, onOpenNativeDetail: onOpenNativeDetail)
                 }
             }
@@ -943,11 +979,9 @@ private struct CourseAnnouncementsContent: View {
     @Binding var filter: CourseAnnouncementFilter
     @Binding var sort: CourseAnnouncementSort
 
-    private let summaryColumns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
-    ]
+    @State private var selectedAnnouncement: CourseAnnouncement?
+
+    private let summaryColumns: [GridItem] = .metricCardColumns()
 
     private var visibleAnnouncements: [CourseAnnouncement] {
         let filteredAnnouncements = announcements
@@ -973,79 +1007,96 @@ private struct CourseAnnouncementsContent: View {
     }
 
     var body: some View {
-        HStack {
-            Text("Announcements")
-                .font(.title2.weight(.semibold))
+        let announcementsToShow = visibleAnnouncements
+        let lastAnnouncementID = announcementsToShow.last?.id
 
-            Spacer()
+        Group {
+            HStack {
+                Text("Announcements")
+                    .font(.title2.weight(.semibold))
 
-            Button("Refresh Announcements") {
-                Task {
-                    await store.loadAnnouncements(for: course.id)
+                Spacer()
+
+                Button("Refresh Announcements") {
+                    Task {
+                        await store.loadAnnouncements(for: course.id)
+                    }
                 }
+                .disabled(isLoading)
             }
-            .disabled(isLoading)
-        }
 
-        LazyVGrid(columns: summaryColumns, spacing: 12) {
-            SummaryCard(
-                title: "Total",
-                value: "\(announcements.count)",
-                detail: "Announcements Canvas returned for this course.",
-                systemImage: "megaphone",
-                tint: .indigo
+            LazyVGrid(columns: summaryColumns, spacing: 12) {
+                SummaryCard(
+                    title: "Total",
+                    value: "\(announcements.count)",
+                    detail: "Announcements Canvas returned for this course.",
+                    systemImage: "megaphone",
+                    tint: .indigo
+                )
+
+                SummaryCard(
+                    title: "Unread",
+                    value: "\(unreadCount)",
+                    detail: "Announcements Canvas marks as unread.",
+                    systemImage: "circle.fill",
+                    tint: .blue
+                )
+
+                SummaryCard(
+                    title: "Restricted",
+                    value: "\(lockedCount)",
+                    detail: "Announcements locked for the current user.",
+                    systemImage: "lock",
+                    tint: .orange
+                )
+            }
+
+            CourseWorkspaceControls(
+                searchPrompt: "Search announcements",
+                searchQuery: $searchQuery,
+                filter: $filter,
+                sort: $sort,
+                shownCount: announcementsToShow.count,
+                totalCount: announcements.count
             )
 
-            SummaryCard(
-                title: "Unread",
-                value: "\(unreadCount)",
-                detail: "Announcements Canvas marks as unread.",
-                systemImage: "circle.fill",
-                tint: .blue
-            )
+            if isLoading && announcements.isEmpty {
+                ProgressView("Loading announcements...")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 24)
+            } else if announcements.isEmpty {
+                SetupPromptView(
+                    title: "No Announcements Yet",
+                    message: "Canvas has not returned announcements for this course."
+                )
+            } else if announcementsToShow.isEmpty {
+                SetupPromptView(
+                    title: "No Matching Announcements",
+                    message: "Change the search, filter, or sort controls to review more announcements."
+                )
+            } else {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(announcementsToShow) { announcement in
+                        CourseAnnouncementRow(announcement: announcement) {
+                            selectedAnnouncement = announcement
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selectedAnnouncement = announcement
+                        }
 
-            SummaryCard(
-                title: "Restricted",
-                value: "\(lockedCount)",
-                detail: "Announcements locked for the current user.",
-                systemImage: "lock",
-                tint: .orange
-            )
-        }
-
-        CourseWorkspaceControls(
-            searchPrompt: "Search announcements",
-            searchQuery: $searchQuery,
-            filter: $filter,
-            sort: $sort,
-            shownCount: visibleAnnouncements.count,
-            totalCount: announcements.count
-        )
-
-        if isLoading && announcements.isEmpty {
-            ProgressView("Loading announcements...")
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 24)
-        } else if announcements.isEmpty {
-            SetupPromptView(
-                title: "No Announcements Yet",
-                message: "Canvas has not returned announcements for this course."
-            )
-        } else if visibleAnnouncements.isEmpty {
-            SetupPromptView(
-                title: "No Matching Announcements",
-                message: "Change the search, filter, or sort controls to review more announcements."
-            )
-        } else {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(visibleAnnouncements) { announcement in
-                    CourseAnnouncementRow(announcement: announcement)
-
-                    if announcement.id != visibleAnnouncements.last?.id {
-                        Divider()
+                        if announcement.id != lastAnnouncementID {
+                            Divider()
+                        }
                     }
                 }
             }
+        }
+        .sheet(item: $selectedAnnouncement) { announcement in
+            CourseAnnouncementDetailView(
+                announcement: announcement,
+                courseName: course.name
+            )
         }
     }
 
@@ -1069,6 +1120,7 @@ private struct CourseAnnouncementsContent: View {
 
 private struct CourseAnnouncementRow: View {
     let announcement: CourseAnnouncement
+    var onRead: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1098,15 +1150,18 @@ private struct CourseAnnouncementRow: View {
 
             HStack(spacing: 12) {
                 Label(
-                    DisplayFormatters.formatted(date: announcement.displayDate),
+                    DisplayFormatters.rowDateText(date: announcement.displayDate),
                     systemImage: "clock"
                 )
 
-                if let relative = DisplayFormatters.relativeString(date: announcement.displayDate) {
-                    Text(relative)
-                }
-
                 Spacer()
+
+                if let onRead {
+                    Button("Read") {
+                        onRead()
+                    }
+                    .font(.caption.weight(.semibold))
+                }
 
                 if let htmlURL = announcement.htmlURL {
                     Link("Open in Canvas", destination: htmlURL)
@@ -1118,6 +1173,143 @@ private struct CourseAnnouncementRow: View {
         }
         .padding(.vertical, 10)
     }
+}
+
+private struct CourseAnnouncementDetailView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let announcement: CourseAnnouncement
+    let courseName: String
+
+    @State private var renderedBody: AttributedString?
+    @State private var didAttemptRender = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                header
+
+                bodyContent
+
+                if let htmlURL = announcement.htmlURL {
+                    Link("Open in Canvas", destination: htmlURL)
+                        .font(.headline)
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: 760, alignment: .leading)
+        }
+        .frame(minWidth: 540, minHeight: 440)
+        .onAppear {
+            guard !didAttemptRender else { return }
+            renderedBody = canvasAnnouncementAttributedBody(from: announcement.message)
+            didAttemptRender = true
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(announcement.title)
+                        .font(.largeTitle.weight(.semibold))
+
+                    Text(courseName)
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if announcement.isUnread {
+                    PillBadge(text: "Unread", tint: .blue)
+                }
+
+                if announcement.lockedForUser == true {
+                    PillBadge(text: "Restricted", tint: .orange)
+                }
+
+                Button("Close") {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+
+            HStack(spacing: 12) {
+                Label(
+                    DisplayFormatters.rowDateText(date: announcement.displayDate),
+                    systemImage: "clock"
+                )
+
+                if let relative = DisplayFormatters.relativeString(date: announcement.displayDate) {
+                    Text(relative)
+                }
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var bodyContent: some View {
+        if let renderedBody {
+            Text(renderedBody)
+                .font(.system(size: 15))
+                .lineSpacing(4)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else if didAttemptRender, let fallback = announcement.summaryText {
+            Text(fallback)
+                .font(.system(size: 15))
+                .lineSpacing(4)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else if didAttemptRender {
+            Text("Canvas did not return body content for this announcement.")
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            ProgressView("Rendering announcement...")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 24)
+        }
+    }
+}
+
+private func canvasAnnouncementAttributedBody(from html: String?) -> AttributedString? {
+    guard let html, !html.isEmpty else {
+        return nil
+    }
+
+    guard let data = html.data(using: .utf8) else {
+        return nil
+    }
+
+    let options: [NSAttributedString.DocumentReadingOptionKey: Any] = [
+        .documentType: NSAttributedString.DocumentType.html,
+        .characterEncoding: String.Encoding.utf8.rawValue
+    ]
+
+    guard let nsAttributed = try? NSAttributedString(
+        data: data,
+        options: options,
+        documentAttributes: nil
+    ) else {
+        return nil
+    }
+
+    let mutable = NSMutableAttributedString(attributedString: nsAttributed)
+    let fullRange = NSRange(location: 0, length: mutable.length)
+    mutable.removeAttribute(.font, range: fullRange)
+    mutable.removeAttribute(.foregroundColor, range: fullRange)
+    mutable.removeAttribute(.backgroundColor, range: fullRange)
+
+    let trimmed = mutable.string.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        return nil
+    }
+
+    return AttributedString(mutable)
 }
 
 private struct CourseSyllabusContent: View {
@@ -1163,9 +1355,7 @@ private struct CourseSyllabusContent: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(16)
-            .background(Color.primary.opacity(0.04))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .appCard(padding: 16)
         } else {
             SetupPromptView(
                 title: "No Syllabus Yet",
@@ -1187,11 +1377,7 @@ private struct CourseFilesContent: View {
 
     @State private var selectedFolderID: Int?
 
-    private let summaryColumns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
-    ]
+    private let summaryColumns: [GridItem] = .metricCardColumns()
 
     private var selectedFolder: CanvasFolder? {
         if let selectedFolderID,
@@ -1274,6 +1460,13 @@ private struct CourseFilesContent: View {
     }
 
     var body: some View {
+        let foldersToShow = visibleFolders
+        let filesToShow = visibleFiles
+        let selectedFilesSnapshot = selectedFiles
+        let selectedFolderSnapshot = selectedFolder
+        let lastFolderID = foldersToShow.last?.id
+        let lastFileID = filesToShow.last?.id
+
         HStack {
             Text("Files")
                 .font(.title2.weight(.semibold))
@@ -1308,8 +1501,8 @@ private struct CourseFilesContent: View {
 
             SummaryCard(
                 title: "Selected",
-                value: selectedFolder?.filesCount.map { "\($0)" } ?? "\(selectedFiles.count)",
-                detail: selectedFolder?.displayName ?? "Choose a folder to review files.",
+                value: selectedFolderSnapshot?.filesCount.map { "\($0)" } ?? "\(selectedFilesSnapshot.count)",
+                detail: selectedFolderSnapshot?.displayName ?? "Choose a folder to review files.",
                 systemImage: "folder.badge.gearshape",
                 tint: .teal
             )
@@ -1320,8 +1513,8 @@ private struct CourseFilesContent: View {
             searchQuery: $searchQuery,
             filter: $filter,
             sort: $sort,
-            shownCount: visibleFiles.count,
-            totalCount: selectedFiles.count
+            shownCount: filesToShow.count,
+            totalCount: selectedFilesSnapshot.count
         )
 
         if isLoadingFolders && folders.isEmpty {
@@ -1333,7 +1526,7 @@ private struct CourseFilesContent: View {
                 title: "No Files Yet",
                 message: "Canvas has not returned any visible folders for this course."
             )
-        } else if visibleFolders.isEmpty {
+        } else if foldersToShow.isEmpty {
             SetupPromptView(
                 title: "No Matching Folders",
                 message: "Change the search text to review more course folders."
@@ -1344,31 +1537,35 @@ private struct CourseFilesContent: View {
                     Text("Folders")
                         .font(.headline)
 
-                    ForEach(visibleFolders) { folder in
-                        CourseFolderRow(
-                            folder: folder,
-                            isSelected: folder.id == selectedFolder?.id
-                        ) {
-                            selectedFolderID = folder.id
-                            Task {
-                                await store.loadFilesIfNeeded(for: folder.id)
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(foldersToShow) { folder in
+                            CourseFolderRow(
+                                folder: folder,
+                                isSelected: folder.id == selectedFolderSnapshot?.id
+                            ) {
+                                selectedFolderID = folder.id
+                                Task {
+                                    await store.loadFilesIfNeeded(for: folder.id)
+                                }
+                            }
+
+                            if folder.id != lastFolderID {
+                                Divider()
                             }
                         }
                     }
                 }
-                .frame(width: 280, alignment: .topLeading)
-                .padding(14)
-                .background(Color.primary.opacity(0.04))
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .frame(minWidth: 240, idealWidth: 280, maxWidth: 300, alignment: .topLeading)
+                .appCard(padding: 14)
 
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(selectedFolder?.displayName ?? "Files")
+                            Text(selectedFolderSnapshot?.displayName ?? "Files")
                                 .font(.headline)
 
-                            if let selectedFolder {
-                                Text(selectedFolder.itemCountDescription)
+                            if let selectedFolderSnapshot {
+                                Text(selectedFolderSnapshot.itemCountDescription)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -1376,10 +1573,10 @@ private struct CourseFilesContent: View {
 
                         Spacer()
 
-                        if let selectedFolder {
+                        if let selectedFolderSnapshot {
                             Button("Refresh Folder") {
                                 Task {
-                                    await store.loadFiles(for: selectedFolder.id)
+                                    await store.loadFiles(for: selectedFolderSnapshot.id)
                                 }
                             }
                             .disabled(isLoadingSelectedFiles)
@@ -1390,26 +1587,26 @@ private struct CourseFilesContent: View {
                         PillBadge(text: "\(unavailableFileCount) locked or hidden", tint: .orange)
                     }
 
-                    if isLoadingSelectedFiles && selectedFiles.isEmpty {
+                    if isLoadingSelectedFiles && selectedFilesSnapshot.isEmpty {
                         ProgressView("Loading files...")
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.vertical, 24)
-                    } else if selectedFiles.isEmpty {
+                    } else if selectedFilesSnapshot.isEmpty {
                         SetupPromptView(
                             title: "Folder Is Empty",
                             message: "Canvas did not return any visible files for this folder."
                         )
-                    } else if visibleFiles.isEmpty {
+                    } else if filesToShow.isEmpty {
                         SetupPromptView(
                             title: "No Matching Files",
                             message: "Change the search, filter, or sort controls to review more files."
                         )
                     } else {
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(visibleFiles) { file in
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(filesToShow) { file in
                                 CourseFileRow(file: file, courseID: course.id)
 
-                                if file.id != visibleFiles.last?.id {
+                                if file.id != lastFileID {
                                     Divider()
                                 }
                             }
@@ -1417,9 +1614,7 @@ private struct CourseFilesContent: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(16)
-                .background(Color.primary.opacity(0.04))
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .appCard(padding: 16)
             }
         }
     }
@@ -1480,8 +1675,14 @@ private struct CourseFolderRow: View {
                 Spacer(minLength: 0)
             }
             .padding(10)
-            .background(isSelected ? Color.blue.opacity(0.10) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(isSelected ? Color.accentColor.opacity(0.3) : Color.clear, lineWidth: 1)
+            )
         }
         .buttonStyle(.plain)
     }
@@ -1504,6 +1705,34 @@ private struct CourseFileRow: View {
     }
 
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 12) {
+                fileInfo
+
+                Spacer(minLength: 12)
+
+                HStack(spacing: 8) {
+                    actionControls
+                }
+                .fixedSize()
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                fileInfo
+
+                FlowLayout(spacing: 8, lineSpacing: 8) {
+                    actionControls
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.vertical, 10)
+        .sheet(item: $previewItem) { item in
+            QuickLookPreviewSheet(item: item)
+        }
+    }
+
+    private var fileInfo: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: file.isUnavailable ? "lock.doc" : "doc")
                 .foregroundStyle(file.isUnavailable ? .orange : .blue)
@@ -1513,6 +1742,8 @@ private struct CourseFileRow: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(file.name)
                     .font(.headline)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
 
                 HStack(spacing: 12) {
                     if let sizeDescription = file.sizeDescription {
@@ -1531,35 +1762,66 @@ private struct CourseFileRow: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             }
+        }
+    }
 
-            Spacer()
+    @ViewBuilder
+    private var actionControls: some View {
+        if file.isUnavailable {
+            PillBadge(text: "Restricted", tint: .orange)
+        }
 
-            if file.isUnavailable {
-                PillBadge(text: "Restricted", tint: .orange)
-            }
+        if let record = store.downloadRecord(for: file) {
+            if record.state == .downloaded {
+                Button("Preview") {
+                    previewRecord(record)
+                }
+                .font(.caption.weight(.semibold))
 
-            if let record = store.downloadRecord(for: file) {
-                DownloadActions(record: record, onPreview: previewRecord)
+                Button("Open") {
+                    store.openDownloadedFile(record)
+                }
+                .font(.caption.weight(.semibold))
+
+                Button("Reveal") {
+                    store.revealDownloadedFile(record)
+                }
+                .font(.caption.weight(.semibold))
+
+                Button("Remove", role: .destructive) {
+                    store.removeDownloadedFile(record)
+                }
+                .font(.caption.weight(.semibold))
+            } else if record.state == .downloading {
+                ProgressView()
+                    .controlSize(.small)
             } else {
-                HStack(spacing: 8) {
-                    Button("Download") {
-                        Task {
-                            await store.downloadFile(file, courseID: courseID)
-                        }
-                    }
-                    .font(.caption.weight(.semibold))
-                    .disabled(file.isUnavailable)
-
-                    if let url = file.actionableURL {
-                        Link("Open", destination: url)
-                            .font(.caption.weight(.semibold))
+                Button(record.state == .failed ? "Retry" : "Download") {
+                    Task {
+                        await store.retryDownload(record)
                     }
                 }
+                .font(.caption.weight(.semibold))
+                .disabled(record.state == .downloading)
             }
-        }
-        .padding(.vertical, 10)
-        .sheet(item: $previewItem) { item in
-            QuickLookPreviewSheet(item: item)
+
+            if let url = file.actionableURL {
+                Link("Canvas", destination: url)
+                    .font(.caption.weight(.semibold))
+            }
+        } else {
+            Button("Download") {
+                Task {
+                    await store.downloadFile(file, courseID: courseID)
+                }
+            }
+            .font(.caption.weight(.semibold))
+            .disabled(file.isUnavailable)
+
+            if let url = file.actionableURL {
+                Link("Open", destination: url)
+                    .font(.caption.weight(.semibold))
+            }
         }
     }
 
@@ -1584,10 +1846,7 @@ private struct CourseAssignmentsContent: View {
 
     @State private var selectedAssignment: CourseAssignment?
 
-    private let summaryColumns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
-    ]
+    private let summaryColumns: [GridItem] = .metricCardColumns(minimum: 220)
 
     private var filteredAssignments: [CourseAssignment] {
         let filteredAssignments = assignments
@@ -1633,6 +1892,9 @@ private struct CourseAssignmentsContent: View {
     }
 
     var body: some View {
+        let assignmentsToShow = filteredAssignments
+        let lastAssignmentID = assignmentsToShow.last?.id
+
         Group {
             HStack {
                 Text("Assignments")
@@ -1686,7 +1948,7 @@ private struct CourseAssignmentsContent: View {
                 searchQuery: $searchQuery,
                 filter: $filter,
                 sort: $sort,
-                shownCount: filteredAssignments.count,
+                shownCount: assignmentsToShow.count,
                 totalCount: assignments.count
             )
 
@@ -1699,21 +1961,21 @@ private struct CourseAssignmentsContent: View {
                     title: "No Assignments Yet",
                     message: "Canvas has not returned any assignments for this course."
                 )
-            } else if filteredAssignments.isEmpty {
+            } else if assignmentsToShow.isEmpty {
                 SetupPromptView(
                     title: "No Matching Work",
                     message: "Change the search, filter, or sort controls to review a different slice of this course."
                 )
             } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(filteredAssignments) { assignment in
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(assignmentsToShow) { assignment in
                         CourseAssignmentRow(assignment: assignment, courseName: course.name)
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 selectedAssignment = assignment
                             }
 
-                        if assignment.id != filteredAssignments.last?.id {
+                        if assignment.id != lastAssignmentID {
                             Divider()
                         }
                     }
@@ -1754,10 +2016,7 @@ private struct CourseGradesContent: View {
 
     @State private var selectedAssignment: CourseAssignment?
 
-    private let summaryColumns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
-    ]
+    private let summaryColumns: [GridItem] = .metricCardColumns(minimum: 220)
 
     private var enrollment: CourseEnrollment? {
         course.studentEnrollment
@@ -1840,6 +2099,11 @@ private struct CourseGradesContent: View {
     }
 
     var body: some View {
+        let gradedAssignmentsToShow = gradedAssignments
+        let allGradedAssignmentsToShow = allGradedAssignments
+        let recentScores = Array(gradedAssignmentsToShow.prefix(10))
+        let lastRecentScoreID = recentScores.last?.id
+
         Group {
             HStack {
                 Text("Grades")
@@ -1873,7 +2137,7 @@ private struct CourseGradesContent: View {
 
                 SummaryCard(
                     title: "Graded Items",
-                    value: "\(allGradedAssignments.count)",
+                    value: "\(allGradedAssignmentsToShow.count)",
                     detail: "Assignments with posted scores or grades.",
                     systemImage: "checkmark.circle",
                     tint: .orange
@@ -1903,20 +2167,20 @@ private struct CourseGradesContent: View {
                 searchPrompt: "Search graded assignments",
                 searchQuery: $searchQuery,
                 sort: $sort,
-                shownCount: gradedAssignments.count,
-                totalCount: allGradedAssignments.count
+                shownCount: gradedAssignmentsToShow.count,
+                totalCount: allGradedAssignmentsToShow.count
             )
 
             if isLoading && assignments.isEmpty {
                 ProgressView("Loading grades...")
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 24)
-            } else if allGradedAssignments.isEmpty {
+            } else if allGradedAssignmentsToShow.isEmpty {
                 SetupPromptView(
                     title: "No Grades Posted",
                     message: "Canvas has not returned any graded assignments for this course yet."
                 )
-            } else if gradedAssignments.isEmpty {
+            } else if gradedAssignmentsToShow.isEmpty {
                 SetupPromptView(
                     title: "No Matching Scores",
                     message: "Change the search or sort controls to review more graded assignments."
@@ -1926,14 +2190,14 @@ private struct CourseGradesContent: View {
                     Text("Recent Scores")
                         .font(.title2.weight(.semibold))
 
-                    ForEach(gradedAssignments.prefix(10)) { assignment in
+                    ForEach(recentScores) { assignment in
                         CourseAssignmentRow(assignment: assignment, courseName: course.name)
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 selectedAssignment = assignment
                             }
 
-                        if assignment.id != gradedAssignments.prefix(10).last?.id {
+                        if assignment.id != lastRecentScoreID {
                             Divider()
                         }
                     }

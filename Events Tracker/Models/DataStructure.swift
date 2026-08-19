@@ -84,6 +84,40 @@ struct TelegramReminderConfig: Codable, Equatable {
     }
 }
 
+struct AutoSyncConfig: Codable, Equatable {
+    var isEnabled: Bool = false
+    var intervalMinutes: Int = 30
+
+    enum CodingKeys: String, CodingKey {
+        case isEnabled
+        case intervalMinutes
+    }
+
+    init(
+        isEnabled: Bool = false,
+        intervalMinutes: Int = 30
+    ) {
+        self.isEnabled = isEnabled
+        self.intervalMinutes = intervalMinutes
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        intervalMinutes = try container.decodeIfPresent(Int.self, forKey: .intervalMinutes) ?? 30
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(isEnabled, forKey: .isEnabled)
+        try container.encode(intervalMinutes, forKey: .intervalMinutes)
+    }
+
+    var normalizedIntervalMinutes: Int {
+        min(max(intervalMinutes, 5), 240)
+    }
+}
+
 enum DownloadCacheLimitPreset: String, Codable, CaseIterable, Identifiable {
     case fiveHundredMB
     case oneGB
@@ -130,6 +164,7 @@ struct CanvasConfig: Codable, Equatable {
     var lookaheadDays: Int = 14
     var telegramReminders: TelegramReminderConfig = TelegramReminderConfig()
     var downloadCacheLimit: DownloadCacheLimitPreset = .unlimited
+    var autoSync: AutoSyncConfig = AutoSyncConfig()
 
     enum CodingKeys: String, CodingKey {
         case baseURL
@@ -137,6 +172,7 @@ struct CanvasConfig: Codable, Equatable {
         case lookaheadDays
         case telegramReminders
         case downloadCacheLimit
+        case autoSync
     }
 
     init(
@@ -144,13 +180,15 @@ struct CanvasConfig: Codable, Equatable {
         token: String = "",
         lookaheadDays: Int = 14,
         telegramReminders: TelegramReminderConfig = TelegramReminderConfig(),
-        downloadCacheLimit: DownloadCacheLimitPreset = .unlimited
+        downloadCacheLimit: DownloadCacheLimitPreset = .unlimited,
+        autoSync: AutoSyncConfig = AutoSyncConfig()
     ) {
         self.baseURL = baseURL
         self.token = token
         self.lookaheadDays = lookaheadDays
         self.telegramReminders = telegramReminders
         self.downloadCacheLimit = downloadCacheLimit
+        self.autoSync = autoSync
     }
 
     init(from decoder: Decoder) throws {
@@ -166,6 +204,10 @@ struct CanvasConfig: Codable, Equatable {
             DownloadCacheLimitPreset.self,
             forKey: .downloadCacheLimit
         ) ?? .unlimited
+        autoSync = try container.decodeIfPresent(
+            AutoSyncConfig.self,
+            forKey: .autoSync
+        ) ?? AutoSyncConfig()
     }
 
     func encode(to encoder: Encoder) throws {
@@ -174,6 +216,7 @@ struct CanvasConfig: Codable, Equatable {
         try container.encode(lookaheadDays, forKey: .lookaheadDays)
         try container.encode(telegramReminders, forKey: .telegramReminders)
         try container.encode(downloadCacheLimit, forKey: .downloadCacheLimit)
+        try container.encode(autoSync, forKey: .autoSync)
     }
 
     var normalizedBaseURL: String {
@@ -1446,6 +1489,11 @@ struct CanvasAssignment: Codable, Hashable {
     }
 }
 
+struct CanvasAssignmentIdentity: Hashable {
+    let courseID: Int?
+    let assignmentID: Int
+}
+
 enum CourseAssignmentStatus: String, Codable, Hashable {
     case missing = "Missing"
     case late = "Late"
@@ -1617,6 +1665,51 @@ struct CourseAssignment: Codable, Identifiable, Hashable {
         submission?.gradedAt ?? submission?.submittedAt ?? dueAt
     }
 
+    var canvasURL: URL? {
+        htmlURL
+    }
+
+    var submissionURL: URL? {
+        guard let canvasURL else {
+            return nil
+        }
+
+        let path = canvasURL.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let components = path.split(separator: "/")
+        guard components.count >= 4,
+              components[0] == "courses",
+              components[2] == "assignments"
+        else {
+            return canvasURL
+        }
+
+        var submissionURL = canvasURL
+        submissionURL.append(path: "submissions")
+        return submissionURL
+    }
+
+    var showsSubmissionAction: Bool {
+        if submission?.isSubmitted == true || hasSubmittedSubmissions == true {
+            return submissionURL != nil
+        }
+
+        guard let submissionTypes else {
+            return submissionURL != nil
+        }
+
+        let normalizedSubmissionTypes = Set(
+            submissionTypes.map {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            }
+        )
+        let blockedSubmissionTypes: Set<String> = ["none", "on_paper"]
+        return !normalizedSubmissionTypes.isDisjoint(with: blockedSubmissionTypes) ? false : submissionURL != nil
+    }
+
+    var submissionActionTitle: String {
+        submission?.isSubmitted == true || hasSubmittedSubmissions == true ? "View Submission" : "Open Submission"
+    }
+
     func matchesSearch(_ query: String) -> Bool {
         workspaceSearchMatches(
             query,
@@ -1731,6 +1824,14 @@ struct UpcomingEvent: Codable, Identifiable, Hashable {
         assignment != nil
     }
 
+    var assignmentIdentity: CanvasAssignmentIdentity? {
+        guard let assignment else {
+            return nil
+        }
+
+        return CanvasAssignmentIdentity(courseID: assignment.courseID ?? courseID, assignmentID: assignment.id)
+    }
+
     var kindLabel: String {
         isAssignment ? "Assignment" : "Event"
     }
@@ -1798,6 +1899,10 @@ struct MissingSubmission: Codable, Identifiable, Hashable {
         }
 
         return dueAt < referenceDate
+    }
+
+    var assignmentIdentity: CanvasAssignmentIdentity {
+        CanvasAssignmentIdentity(courseID: courseID, assignmentID: id)
     }
 }
 
@@ -1878,7 +1983,15 @@ struct CalendarEventItem: Identifiable, Hashable {
         upcomingEvents: [UpcomingEvent],
         missingSubmissions: [MissingSubmission]
     ) -> [CalendarEventItem] {
-        let items = upcomingEvents.map { CalendarEventItem(kind: .upcoming($0)) }
+        let missingAssignmentIdentities = Set(missingSubmissions.map(\.assignmentIdentity))
+        let visibleUpcomingEvents = upcomingEvents.filter { event in
+            guard let assignmentIdentity = event.assignmentIdentity else {
+                return true
+            }
+
+            return !missingAssignmentIdentities.contains(assignmentIdentity)
+        }
+        let items = visibleUpcomingEvents.map { CalendarEventItem(kind: .upcoming($0)) }
             + missingSubmissions.map { CalendarEventItem(kind: .missing($0)) }
 
         return items.sorted(by: sort)

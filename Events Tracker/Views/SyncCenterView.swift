@@ -29,18 +29,10 @@ struct SyncCenterView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Sync Center")
-                    .font(.largeTitle.weight(.semibold))
-
-                Text("Review local cache health, prepare course metadata for offline use, and clear local data selectively.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
+        ScreenHeader(
+            title: "Sync Center",
+            subtitle: "Review local cache health, prepare course metadata for offline use, and clear local data selectively."
+        ) {
             Button {
                 Task {
                     await store.refresh()
@@ -48,16 +40,18 @@ struct SyncCenterView: View {
             } label: {
                 if store.isSyncing {
                     ProgressView()
+                        .controlSize(.small)
                 } else {
                     Label("Sync Dashboard", systemImage: "arrow.clockwise")
                 }
             }
+            .buttonStyle(.bordered)
             .disabled(!store.isConfigured || store.isSyncing)
         }
     }
 
     private var summaryCards: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
+        LazyVGrid(columns: .metricCardColumns(), spacing: 12) {
             SummaryCard(
                 title: "Dashboard",
                 value: inventory.lastDashboardSync.map { DisplayFormatters.relativeFormatter.localizedString(for: $0, relativeTo: Date()) } ?? "Never",
@@ -90,7 +84,7 @@ struct SyncCenterView: View {
     }
 
     private var actions: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        return VStack(alignment: .leading, spacing: 12) {
             Text("Actions")
                 .font(.title2.weight(.semibold))
 
@@ -141,27 +135,30 @@ struct SyncCenterView: View {
     }
 
     private var courseReadinessSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let readinessItems = store.courseOfflineReadiness
+        let lastReadinessID = readinessItems.last?.id
+
+        return VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Course Offline Readiness")
                     .font(.title2.weight(.semibold))
 
                 Spacer()
 
-                Text("\(store.courseOfflineReadiness.filter(\.isFullyCached).count) ready")
+                Text("\(readinessItems.filter(\.isFullyCached).count) ready")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
 
-            if store.courseOfflineReadiness.isEmpty {
+            if readinessItems.isEmpty {
                 SetupPromptView(
                     title: "No Courses Loaded",
                     message: "Sync the dashboard before preparing courses for offline use."
                 )
                 .frame(minHeight: 260)
             } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(store.courseOfflineReadiness) { readiness in
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(readinessItems) { readiness in
                         CourseOfflineReadinessRow(
                             readiness: readiness,
                             isPreloading: store.preloadingCourseIDs.contains(readiness.courseID)
@@ -178,14 +175,12 @@ struct SyncCenterView: View {
                             }
                         )
 
-                        if readiness.id != store.courseOfflineReadiness.last?.id {
+                        if readiness.id != lastReadinessID {
                             Divider()
                         }
                     }
                 }
-                .padding(16)
-                .background(Color.primary.opacity(0.04))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .appCard(padding: 16)
             }
         }
     }
@@ -341,7 +336,7 @@ private struct OfflineDownloadPlannerView: View {
     }
 
     private var plannerSummary: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
+        LazyVGrid(columns: .metricCardColumns(), spacing: 12) {
             OfflinePlannerSummaryCard(
                 title: "Selected",
                 value: "\(plan.fileCount)",
@@ -390,21 +385,24 @@ private struct OfflineDownloadPlannerView: View {
     }
 
     private var plannerTree: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let foldersToShow = folders
+        let lastFolderID = foldersToShow.last?.id
+
+        return LazyVStack(alignment: .leading, spacing: 0) {
             if selectedCourse == nil {
                 SetupPromptView(
                     title: "No Course Selected",
                     message: "Sync courses before planning offline downloads."
                 )
                 .frame(minHeight: 180)
-            } else if folders.isEmpty {
+            } else if foldersToShow.isEmpty {
                 SetupPromptView(
                     title: "No File Metadata Loaded",
                     message: "Load metadata for this course before selecting files."
                 )
                 .frame(minHeight: 180)
             } else {
-                ForEach(folders) { folder in
+                ForEach(foldersToShow) { folder in
                     OfflineFolderSelectionRow(
                         folder: folder,
                         files: store.files(for: folder.id),
@@ -412,15 +410,13 @@ private struct OfflineDownloadPlannerView: View {
                         selection: $selection
                     )
 
-                    if folder.id != folders.last?.id {
+                    if folder.id != lastFolderID {
                         Divider()
                     }
                 }
             }
         }
-        .padding(16)
-        .background(Color.primary.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .appCard(padding: 16)
     }
 
     private func loadMetadata() async {
@@ -455,29 +451,13 @@ private struct OfflinePlannerSummaryCard: View {
     let tint: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: systemImage)
-                    .foregroundStyle(tint)
-                    .font(.subheadline)
-
-                Text(title)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            Text(value)
-                .font(.system(size: 24, weight: .semibold, design: .rounded))
-                .foregroundStyle(.primary)
-
-            Text(detail)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(Color.primary.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        MetricCard(
+            title: title,
+            value: value,
+            detail: detail,
+            systemImage: systemImage,
+            tint: tint
+        )
     }
 }
 
@@ -518,13 +498,15 @@ private struct OfflineFolderSelectionRow: View {
                 }
             }
 
-            ForEach(files) { file in
-                OfflineFileSelectionRow(
-                    file: file,
-                    isCourseSelected: isCourseSelected,
-                    selection: $selection
-                )
-                    .padding(.leading, 24)
+            LazyVStack(alignment: .leading, spacing: 8) {
+                ForEach(files) { file in
+                    OfflineFileSelectionRow(
+                        file: file,
+                        isCourseSelected: isCourseSelected,
+                        selection: $selection
+                    )
+                        .padding(.leading, 24)
+                }
             }
         }
         .padding(.vertical, 10)

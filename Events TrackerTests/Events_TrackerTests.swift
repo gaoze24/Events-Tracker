@@ -51,6 +51,19 @@ struct Events_TrackerTests {
         #expect(config.isComplete)
     }
 
+    @Test func autoSyncConfigDefaultsDisabledAndClampsInterval() async throws {
+        let defaults = AutoSyncConfig()
+
+        #expect(!defaults.isEnabled)
+        #expect(defaults.normalizedIntervalMinutes == 30)
+
+        let tooShort = AutoSyncConfig(isEnabled: true, intervalMinutes: 1)
+        let tooLong = AutoSyncConfig(isEnabled: true, intervalMinutes: 999)
+
+        #expect(tooShort.normalizedIntervalMinutes == 5)
+        #expect(tooLong.normalizedIntervalMinutes == 240)
+    }
+
     @Test func reminderHistoryKeysCombineCourseAndAssignmentIDs() async throws {
         let key = ReminderHistoryManager.historyKey(courseID: 12, assignmentID: 34)
 
@@ -438,6 +451,29 @@ struct Events_TrackerTests {
         #expect(!storedJSON.contains("\"botToken\""))
     }
 
+    @Test func canvasConfigManagerRoundTripsAutoSyncSettings() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let fileManager = FileManager.default
+        try? fileManager.removeItem(at: configURL)
+        defer { try? fileManager.removeItem(at: configURL) }
+
+        let tokenStore = InMemoryCanvasTokenStore()
+        let manager = CanvasConfigManager(configURL: configURL, tokenStore: tokenStore)
+        let config = CanvasConfig(
+            baseURL: "https://canvas.example.edu",
+            token: "abc123",
+            autoSync: AutoSyncConfig(isEnabled: true, intervalMinutes: 45)
+        )
+
+        try manager.saveConfig(config)
+
+        let loaded = manager.loadConfig()
+
+        #expect(loaded.autoSync.isEnabled)
+        #expect(loaded.autoSync.intervalMinutes == 45)
+        #expect(loaded.autoSync.normalizedIntervalMinutes == 45)
+    }
+
     @Test func upcomingEventPrefersAssignmentDueDate() async throws {
         let dueDate = Date(timeIntervalSince1970: 1_710_000_000)
         let startDate = Date(timeIntervalSince1970: 1_709_000_000)
@@ -494,6 +530,85 @@ struct Events_TrackerTests {
         #expect(moduleItem.actionableURL?.absoluteString == "https://canvas.example.edu/courses/1/quizzes/77")
         #expect(moduleItem.systemImageName == "checklist")
         #expect(moduleItem.pointsDescription == "25 pts")
+    }
+
+    @Test func assignmentQuickActionURLsAndLabelsPreferSubmissionFlow() async throws {
+        let assignment = CourseAssignment(
+            id: 42,
+            name: "Lab Report",
+            details: nil,
+            dueAt: nil,
+            unlockAt: nil,
+            lockAt: nil,
+            htmlURL: URL(string: "https://canvas.example.edu/courses/7/assignments/42"),
+            courseID: 7,
+            pointsPossible: 100,
+            submissionTypes: ["online_upload"],
+            hasSubmittedSubmissions: false,
+            published: true,
+            gradingType: "points",
+            submission: nil
+        )
+
+        #expect(assignment.canvasURL?.absoluteString == "https://canvas.example.edu/courses/7/assignments/42")
+        #expect(assignment.submissionURL?.absoluteString == "https://canvas.example.edu/courses/7/assignments/42/submissions")
+        #expect(assignment.showsSubmissionAction)
+        #expect(assignment.submissionActionTitle == "Open Submission")
+    }
+
+    @Test func assignmentQuickActionUsesViewLabelForExistingSubmission() async throws {
+        let assignment = CourseAssignment(
+            id: 42,
+            name: "Lab Report",
+            details: nil,
+            dueAt: nil,
+            unlockAt: nil,
+            lockAt: nil,
+            htmlURL: URL(string: "https://canvas.example.edu/courses/7/assignments/42"),
+            courseID: 7,
+            pointsPossible: 100,
+            submissionTypes: ["online_upload"],
+            hasSubmittedSubmissions: true,
+            published: true,
+            gradingType: "points",
+            submission: AssignmentSubmission(
+                submittedAt: Date(timeIntervalSince1970: 1_710_000_000),
+                gradedAt: nil,
+                score: nil,
+                grade: nil,
+                workflowState: "submitted",
+                late: false,
+                missing: false,
+                excused: false,
+                submissionType: "online_upload",
+                attempt: 1
+            )
+        )
+
+        #expect(assignment.showsSubmissionAction)
+        #expect(assignment.submissionActionTitle == "View Submission")
+    }
+
+    @Test func assignmentQuickActionHidesSubmissionForOnPaperOnlyAssignments() async throws {
+        let assignment = CourseAssignment(
+            id: 42,
+            name: "Lab Report",
+            details: nil,
+            dueAt: nil,
+            unlockAt: nil,
+            lockAt: nil,
+            htmlURL: URL(string: "https://canvas.example.edu/courses/7/assignments/42"),
+            courseID: 7,
+            pointsPossible: 100,
+            submissionTypes: ["on_paper"],
+            hasSubmittedSubmissions: false,
+            published: true,
+            gradingType: "points",
+            submission: nil
+        )
+
+        #expect(!assignment.showsSubmissionAction)
+        #expect(assignment.submissionURL?.absoluteString == "https://canvas.example.edu/courses/7/assignments/42/submissions")
     }
 
     @Test func courseAnnouncementBuildsSummaryAndSearchMetadata() async throws {
@@ -554,6 +669,42 @@ struct Events_TrackerTests {
         #expect(grouped.values.first?.contains { $0.isUpcoming } == true)
     }
 
+    @Test func calendarEventItemsPreferMissingWorkOverDuplicateAssignmentEvents() async throws {
+        let dueDate = Date(timeIntervalSince1970: 1_710_000_000)
+        let upcoming = UpcomingEvent(
+            id: "assignment_44",
+            title: "Late Essay",
+            details: nil,
+            startAt: dueDate,
+            endAt: dueDate,
+            allDay: false,
+            contextCode: "course_10",
+            htmlURL: URL(string: "https://canvas.example.edu/calendar_events/44"),
+            workflowState: "active",
+            assignment: CanvasAssignment(
+                id: 44,
+                name: "Late Essay",
+                dueAt: dueDate,
+                courseID: 10,
+                htmlURL: URL(string: "https://canvas.example.edu/courses/10/assignments/44"),
+                pointsPossible: 10
+            )
+        )
+        let missing = MissingSubmission(
+            id: 44,
+            name: "Late Essay",
+            dueAt: dueDate,
+            courseID: 10,
+            htmlURL: URL(string: "https://canvas.example.edu/courses/10/assignments/44"),
+            pointsPossible: 10
+        )
+
+        let items = CalendarEventItem.items(upcomingEvents: [upcoming], missingSubmissions: [missing])
+
+        #expect(items.count == 1)
+        #expect(items.first?.isMissing == true)
+    }
+
     @Test func calendarMonthBuildsFullWeeksAroundMonthBoundaries() async throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -564,6 +715,16 @@ struct Events_TrackerTests {
         #expect(days.count % 7 == 0)
         #expect(days.count >= 35)
         #expect(days.contains { calendar.component(.month, from: $0) == 5 })
+    }
+
+    @Test func displayFormattersRowDateTextUsesSingleDateExpression() async throws {
+        let date = Date().addingTimeInterval(2 * 60 * 60)
+        let rowText = DisplayFormatters.rowDateText(date: date)
+
+        #expect(rowText == DisplayFormatters.formatted(date: date))
+        if let relative = DisplayFormatters.relativeString(date: date) {
+            #expect(!rowText.contains(relative))
+        }
     }
 
     @Test func coursePersonNormalizesRolesAndMatchesSearch() async throws {
@@ -1077,6 +1238,254 @@ struct Events_TrackerTests {
 
         #expect(store.assignments(for: 42).map(\.name) == ["Cached Lab"])
         #expect(store.errorMessage?.contains("Showing cached data") == true)
+    }
+
+    @MainActor
+    @Test func canvasStoreIgnoresCancelledCourseSectionLoads() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let dashboardCacheURL = makeDashboardCacheTempURL()
+        let courseDetailCacheURL = makeCourseDetailCacheTempURL()
+        let fileManager = FileManager.default
+        [configURL, dashboardCacheURL, courseDetailCacheURL].forEach { url in
+            try? fileManager.removeItem(at: url)
+        }
+        defer {
+            [configURL, dashboardCacheURL, courseDetailCacheURL].forEach { url in
+                try? fileManager.removeItem(at: url)
+            }
+        }
+
+        let configManager = CanvasConfigManager(configURL: configURL, tokenStore: InMemoryCanvasTokenStore())
+        try configManager.saveConfig(makeCanvasConfig())
+
+        let databaseManager = DatabaseManager(cacheURL: dashboardCacheURL)
+        try databaseManager.saveSnapshot(
+            CanvasSnapshot(
+                courses: [makeCourse(id: 42, name: "Biology")],
+                upcomingEvents: [],
+                missingSubmissions: [],
+                profile: nil,
+                syncedAt: Date()
+            )
+        )
+
+        let session = makeCapturingURLSession { _ in
+            throw URLError(.cancelled)
+        }
+
+        let store = CanvasStore(
+            configManager: configManager,
+            databaseManager: databaseManager,
+            networkManager: NetworkManager(session: session),
+            detailCacheManager: CourseDetailCacheManager(cacheURL: courseDetailCacheURL)
+        )
+
+        await store.loadModules(for: 42)
+
+        #expect(store.errorMessage == nil)
+        #expect(!store.isLoadingModules(for: 42))
+        #expect(!store.hasLoadedModules(for: 42))
+    }
+
+    @MainActor
+    @Test func canvasStoreSaveConfigurationPersistsAutoSyncSettings() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let dashboardCacheURL = makeDashboardCacheTempURL()
+        let courseDetailCacheURL = makeCourseDetailCacheTempURL()
+        let fileManager = FileManager.default
+        [configURL, dashboardCacheURL, courseDetailCacheURL].forEach { url in
+            try? fileManager.removeItem(at: url)
+        }
+        defer {
+            [configURL, dashboardCacheURL, courseDetailCacheURL].forEach { url in
+                try? fileManager.removeItem(at: url)
+            }
+        }
+
+        let configManager = CanvasConfigManager(configURL: configURL, tokenStore: InMemoryCanvasTokenStore())
+        let store = CanvasStore(
+            configManager: configManager,
+            databaseManager: DatabaseManager(cacheURL: dashboardCacheURL),
+            networkManager: .shared,
+            detailCacheManager: CourseDetailCacheManager(cacheURL: courseDetailCacheURL)
+        )
+
+        try store.saveConfiguration(
+            baseURL: "https://canvas.example.edu",
+            token: "abc123",
+            lookaheadDays: 14,
+            telegramReminders: TelegramReminderConfig(),
+            downloadCacheLimit: .oneGB,
+            autoSync: AutoSyncConfig(isEnabled: true, intervalMinutes: 45)
+        )
+
+        let loaded = configManager.loadConfig()
+
+        #expect(store.config.autoSync.isEnabled)
+        #expect(store.config.autoSync.intervalMinutes == 45)
+        #expect(loaded.autoSync.isEnabled)
+        #expect(loaded.autoSync.intervalMinutes == 45)
+    }
+
+    @MainActor
+    @Test func canvasStoreSaveConfigurationPreservesAutoSyncWhenOmitted() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let dashboardCacheURL = makeDashboardCacheTempURL()
+        let courseDetailCacheURL = makeCourseDetailCacheTempURL()
+        let fileManager = FileManager.default
+        [configURL, dashboardCacheURL, courseDetailCacheURL].forEach { url in
+            try? fileManager.removeItem(at: url)
+        }
+        defer {
+            [configURL, dashboardCacheURL, courseDetailCacheURL].forEach { url in
+                try? fileManager.removeItem(at: url)
+            }
+        }
+
+        let configManager = CanvasConfigManager(configURL: configURL, tokenStore: InMemoryCanvasTokenStore())
+        try configManager.saveConfig(CanvasConfig(
+            baseURL: "https://canvas.example.edu",
+            token: "abc123",
+            autoSync: AutoSyncConfig(isEnabled: true, intervalMinutes: 60)
+        ))
+        let store = CanvasStore(
+            configManager: configManager,
+            databaseManager: DatabaseManager(cacheURL: dashboardCacheURL),
+            networkManager: .shared,
+            detailCacheManager: CourseDetailCacheManager(cacheURL: courseDetailCacheURL)
+        )
+
+        try store.saveConfiguration(
+            baseURL: "https://canvas.example.edu",
+            token: "abc123",
+            lookaheadDays: 21,
+            telegramReminders: TelegramReminderConfig(),
+            downloadCacheLimit: .twoGB
+        )
+
+        let loaded = configManager.loadConfig()
+
+        #expect(loaded.autoSync.isEnabled)
+        #expect(loaded.autoSync.intervalMinutes == 60)
+    }
+
+    @MainActor
+    @Test func canvasStoreAutoSyncRefreshesDashboardAndCachedCourseMetadata() async throws {
+        let configURL = makeCanvasConfigTempURL()
+        let dashboardCacheURL = makeDashboardCacheTempURL()
+        let courseDetailCacheURL = makeCourseDetailCacheTempURL()
+        let preferencesURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "EventsTracker-\(UUID().uuidString)-course-preferences.json"
+        )
+        let fileMetadataURL = makeFileDownloadMetadataTempURL()
+        let downloadsURL = makeDownloadsTempDirectoryURL()
+        let fileManager = FileManager.default
+        [configURL, dashboardCacheURL, courseDetailCacheURL, preferencesURL, fileMetadataURL, downloadsURL].forEach { url in
+            try? fileManager.removeItem(at: url)
+        }
+        defer {
+            [configURL, dashboardCacheURL, courseDetailCacheURL, preferencesURL, fileMetadataURL, downloadsURL].forEach { url in
+                try? fileManager.removeItem(at: url)
+            }
+        }
+
+        let referenceDate = Date(timeIntervalSince1970: 1_710_000_000)
+        let configManager = CanvasConfigManager(configURL: configURL, tokenStore: InMemoryCanvasTokenStore())
+        try configManager.saveConfig(makeCanvasConfig())
+
+        let databaseManager = DatabaseManager(cacheURL: dashboardCacheURL)
+        try databaseManager.saveSnapshot(
+            CanvasSnapshot(
+                courses: [makeCourse(id: 42, name: "Cached Course")],
+                upcomingEvents: [],
+                missingSubmissions: [],
+                profile: nil,
+                syncedAt: referenceDate
+            )
+        )
+
+        let detailCacheManager = CourseDetailCacheManager(cacheURL: courseDetailCacheURL)
+        try detailCacheManager.saveCache(
+            CourseDetailCacheSnapshot(
+                assignmentsByCourseID: [
+                    42: [makeCourseAssignment(id: 10, name: "Old Cached Lab", dueAt: nil, courseID: 42)]
+                ],
+                modulesByCourseID: [:],
+                foldersByCourseID: [:],
+                filesByFolderID: [:],
+                announcementsByCourseID: [:],
+                syllabusByCourseID: [:],
+                peopleByCourseID: [:],
+                courseAccessedAtByCourseID: [42: referenceDate],
+                savedAt: referenceDate
+            )
+        )
+
+        let preferenceManager = CoursePreferenceManager(preferencesURL: preferencesURL)
+        try preferenceManager.savePreferences(CoursePreferencesSnapshot(offlinePriorityCourseIDs: [43]))
+
+        var requestedPaths: [String] = []
+        let requestedPathsLock = NSLock()
+        let session = makeCapturingURLSession { request in
+            let url = try #require(request.url)
+            requestedPathsLock.lock()
+            requestedPaths.append(url.path)
+            requestedPathsLock.unlock()
+
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            switch url.path {
+            case "/api/v1/courses":
+                return (response, Data(#"[{"id":42,"name":"Cached Course","workflow_state":"available"},{"id":43,"name":"Offline Course","workflow_state":"available"}]"#.utf8))
+            case "/api/v1/users/self/upcoming_events", "/api/v1/users/self/missing_submissions":
+                return (response, Data("[]".utf8))
+            case "/api/v1/users/self/profile":
+                return (response, Data(#"{"id":1,"name":"Student"}"#.utf8))
+            case "/api/v1/courses/42/assignments":
+                return (response, Data(#"[{"id":1,"name":"Fresh Cached Lab","course_id":42,"published":true}]"#.utf8))
+            case "/api/v1/courses/43/assignments":
+                return (response, Data(#"[{"id":2,"name":"Offline Lab","course_id":43,"published":true}]"#.utf8))
+            case "/api/v1/courses/42/modules", "/api/v1/courses/43/modules":
+                return (response, Data(#"[{"id":2,"name":"Week 1","position":1,"workflow_state":"active","published":true,"items":[] }]"#.utf8))
+            case "/api/v1/courses/42/folders":
+                return (response, Data(#"[{"id":420,"name":"Course Files","full_name":"Course Files"}]"#.utf8))
+            case "/api/v1/courses/43/folders":
+                return (response, Data(#"[{"id":430,"name":"Course Files","full_name":"Course Files"}]"#.utf8))
+            case "/api/v1/folders/420/files":
+                return (response, Data(#"[{"id":4200,"display_name":"Cached.pdf","filename":"Cached.pdf","folder_id":420,"content-type":"application/pdf","url":"https://canvas.example.edu/files/4200/download","size":5}]"#.utf8))
+            case "/api/v1/folders/430/files":
+                return (response, Data(#"[{"id":4300,"display_name":"Offline.pdf","filename":"Offline.pdf","folder_id":430,"content-type":"application/pdf","url":"https://canvas.example.edu/files/4300/download","size":5}]"#.utf8))
+            case "/api/v1/announcements":
+                return (response, Data(#"[{"id":5,"title":"Welcome","context_code":"course_42","read_state":"read"}]"#.utf8))
+            case "/api/v1/courses/42":
+                return (response, Data(#"{"id":42,"name":"Cached Course","syllabus_body":"<p>Policy</p>"}"#.utf8))
+            case "/api/v1/courses/43":
+                return (response, Data(#"{"id":43,"name":"Offline Course","syllabus_body":"<p>Policy</p>"}"#.utf8))
+            case "/api/v1/courses/42/users", "/api/v1/courses/43/users":
+                return (response, Data(#"[{"id":6,"name":"Dr. Smith","sortable_name":"Smith, Dr.","short_name":"Dr. Smith","enrollments":[{"type":"TeacherEnrollment","role":"TeacherEnrollment"}]}]"#.utf8))
+            default:
+                Issue.record("Unexpected auto sync request: \(url.path)")
+                return (response, Data("[]".utf8))
+            }
+        }
+
+        let store = CanvasStore(
+            configManager: configManager,
+            databaseManager: databaseManager,
+            networkManager: NetworkManager(session: session),
+            detailCacheManager: detailCacheManager,
+            preferenceManager: preferenceManager,
+            fileDownloadManager: FileDownloadManager(metadataURL: fileMetadataURL, downloadsDirectory: downloadsURL),
+            now: { referenceDate }
+        )
+
+        await store.refreshDashboardAndCachedDetails()
+
+        #expect(store.assignments(for: 42).map(\.name) == ["Fresh Cached Lab"])
+        #expect(store.assignments(for: 43).map(\.name) == ["Offline Lab"])
+        #expect(requestedPaths.contains("/api/v1/courses"))
+        #expect(requestedPaths.contains("/api/v1/courses/42/assignments"))
+        #expect(requestedPaths.contains("/api/v1/courses/43/assignments"))
+        #expect(store.fileDownloadSnapshot.downloadedRecords.isEmpty)
     }
 
     @MainActor
@@ -2694,6 +3103,399 @@ struct Events_TrackerTests {
         #expect(results.contains { $0.title == "Weekly Notes" })
     }
 
+    @Test func globalSearchRanksCourseNameMatchesAboveMetadataOnlyMatches() async throws {
+        let course = Course(
+            id: 10,
+            name: "Biology 101",
+            courseCode: "BIO-101",
+            workflowState: "available",
+            htmlURL: nil,
+            enrollmentTerm: nil,
+            enrollments: nil
+        )
+        let results = GlobalSearchIndex.results(
+            query: "bio",
+            courses: [course],
+            upcomingEvents: [],
+            missingSubmissions: [],
+            assignmentsByCourseID: [
+                10: [
+                    makeCourseAssignment(id: 1, name: "Cell Lab", dueAt: nil, courseID: 10),
+                    makeCourseAssignment(id: 2, name: "Weekly Notes", dueAt: nil, courseID: 10)
+                ]
+            ],
+            modulesByCourseID: [:],
+            foldersByCourseID: [:],
+            filesByFolderID: [:],
+            announcementsByCourseID: [:],
+            syllabusByCourseID: [:],
+            peopleByCourseID: [:],
+            moduleItemDetailsByKey: [:]
+        )
+
+        #expect(results.first?.kind == .course)
+        #expect(results.first?.title == "Biology 101")
+        let assignment = try #require(results.first { $0.kind == .assignment })
+        #expect(assignment.title == "Cell Lab")
+    }
+
+    @Test func globalSearchBoostsUrgentMissingWorkAboveComparableUpcomingEvents() async throws {
+        let now = Date()
+        let missing = MissingSubmission(
+            id: 1,
+            name: "Essay",
+            dueAt: now.addingTimeInterval(-2 * 60 * 60),
+            courseID: 10,
+            htmlURL: URL(string: "https://canvas.example.edu/courses/10/assignments/1"),
+            pointsPossible: 20
+        )
+        let event = UpcomingEvent(
+            id: "2",
+            title: "Essay Review",
+            details: nil,
+            startAt: now.addingTimeInterval(4 * 60 * 60),
+            endAt: now.addingTimeInterval(4 * 60 * 60),
+            allDay: false,
+            contextCode: "course_10",
+            htmlURL: URL(string: "https://canvas.example.edu/calendar_events/2"),
+            workflowState: "active",
+            assignment: nil
+        )
+
+        let results = GlobalSearchIndex.results(
+            query: "essay",
+            courses: [],
+            upcomingEvents: [event],
+            missingSubmissions: [missing],
+            assignmentsByCourseID: [:],
+            modulesByCourseID: [:],
+            foldersByCourseID: [:],
+            filesByFolderID: [:],
+            announcementsByCourseID: [:],
+            syllabusByCourseID: [:],
+            peopleByCourseID: [:],
+            moduleItemDetailsByKey: [:]
+        )
+
+        #expect(results.first?.kind == .missing)
+        #expect(results.first?.title == "Essay")
+    }
+
+    @Test func globalSearchDoesNotDuplicateMissingAssignmentsAsEvents() async throws {
+        let dueAt = Date(timeIntervalSince1970: 1_710_000_000)
+        let missing = MissingSubmission(
+            id: 44,
+            name: "Late Essay",
+            dueAt: dueAt,
+            courseID: 10,
+            htmlURL: URL(string: "https://canvas.example.edu/courses/10/assignments/44"),
+            pointsPossible: 20
+        )
+        let event = UpcomingEvent(
+            id: "assignment_44",
+            title: "Late Essay",
+            details: nil,
+            startAt: dueAt,
+            endAt: dueAt,
+            allDay: false,
+            contextCode: "course_10",
+            htmlURL: URL(string: "https://canvas.example.edu/calendar_events/44"),
+            workflowState: "active",
+            assignment: CanvasAssignment(
+                id: 44,
+                name: "Late Essay",
+                dueAt: dueAt,
+                courseID: 10,
+                htmlURL: URL(string: "https://canvas.example.edu/courses/10/assignments/44"),
+                pointsPossible: 20
+            )
+        )
+
+        let results = GlobalSearchIndex.results(
+            query: "late essay",
+            courses: [],
+            upcomingEvents: [event],
+            missingSubmissions: [missing],
+            assignmentsByCourseID: [:],
+            modulesByCourseID: [:],
+            foldersByCourseID: [:],
+            filesByFolderID: [:],
+            announcementsByCourseID: [:],
+            syllabusByCourseID: [:],
+            peopleByCourseID: [:],
+            moduleItemDetailsByKey: [:]
+        )
+
+        #expect(results.map(\.title) == ["Late Essay"])
+        #expect(results.first?.kind == .missing)
+    }
+
+    @Test func globalSearchDisplayStateReusesFilteredResultsForSections() async throws {
+        let course = GlobalSearchResult(
+            id: "course-1",
+            kind: .course,
+            title: "Biology",
+            subtitle: nil,
+            courseID: 1,
+            courseName: "Biology",
+            url: nil,
+            searchableText: "Biology",
+            score: 100
+        )
+        let assignment = GlobalSearchResult(
+            id: "assignment-1-2",
+            kind: .assignment,
+            title: "Lab",
+            subtitle: "Upcoming",
+            courseID: 1,
+            courseName: "Biology",
+            url: nil,
+            searchableText: "Lab",
+            score: 90
+        )
+        let event = GlobalSearchResult(
+            id: "event-3",
+            kind: .event,
+            title: "Review",
+            subtitle: "Event",
+            courseID: 1,
+            courseName: "Biology",
+            url: nil,
+            searchableText: "Review",
+            score: 80
+        )
+
+        let allTypesState = GlobalSearchDisplayState(
+            results: [course, assignment, event],
+            selectedKind: nil
+        )
+        let assignmentState = GlobalSearchDisplayState(
+            results: [course, assignment, event],
+            selectedKind: .assignment
+        )
+
+        #expect(allTypesState.visibleResults.map(\.id) == ["course-1", "assignment-1-2", "event-3"])
+        #expect(allTypesState.topResults.map(\.id) == ["course-1", "assignment-1-2", "event-3"])
+        #expect(allTypesState.groupedResults.isEmpty)
+        #expect(allTypesState.resultCountLabel == "3 results across 1 sections")
+        #expect(assignmentState.visibleResults.map(\.id) == ["assignment-1-2"])
+        #expect(assignmentState.topResults.isEmpty)
+        #expect(assignmentState.groupedResults.first?.0 == .assignment)
+        #expect(assignmentState.resultCountLabel == "1 assignment result")
+    }
+
+    @Test func globalSearchQueryStateRequiresSubmittedSearchBeforeActivatingQuery() async throws {
+        var state = GlobalSearchQueryState()
+
+        state.updateDraftQuery(" ga ")
+
+        #expect(state.activeQuery == nil)
+        #expect(state.shouldShowPendingSearchPrompt)
+        #expect(!state.shouldShowRecentSearches)
+
+        state.submitSearch()
+
+        #expect(state.activeQuery == "ga")
+        #expect(!state.shouldShowPendingSearchPrompt)
+
+        state.updateDraftQuery("")
+
+        #expect(state.activeQuery == nil)
+        #expect(state.shouldShowRecentSearches)
+    }
+
+    @MainActor
+    @Test func canvasStorePriorityNowPrefersMissingWorkOverPinnedUpcomingEvents() async throws {
+        let dueSoon = Date(timeIntervalSince1970: 1_710_000_000 + 2 * 60 * 60)
+        let pinnedCourse = makeCourse(id: 2, name: "Pinned Course")
+        let regularCourse = makeCourse(id: 1, name: "Regular Course")
+        let missing = MissingSubmission(
+            id: 10,
+            name: "Problem Set",
+            dueAt: dueSoon.addingTimeInterval(-3 * 60 * 60),
+            courseID: regularCourse.id,
+            htmlURL: URL(string: "https://canvas.example.edu/courses/1/assignments/10"),
+            pointsPossible: 10
+        )
+        let pinnedEvent = UpcomingEvent(
+            id: "event-1",
+            title: "Pinned Quiz",
+            details: nil,
+            startAt: dueSoon,
+            endAt: dueSoon,
+            allDay: false,
+            contextCode: "course_2",
+            htmlURL: URL(string: "https://canvas.example.edu/calendar_events/1"),
+            workflowState: "active",
+            assignment: CanvasAssignment(
+                id: 3,
+                name: "Pinned Quiz",
+                dueAt: dueSoon,
+                courseID: pinnedCourse.id,
+                htmlURL: URL(string: "https://canvas.example.edu/courses/2/assignments/3"),
+                pointsPossible: nil
+            )
+        )
+
+        let harness = try makeCanvasStoreHarness(
+            courses: [regularCourse, pinnedCourse],
+            foldersByCourseID: [:],
+            filesByFolderID: [:],
+            upcomingEvents: [pinnedEvent],
+            missingSubmissions: [missing],
+            coursePreferences: CoursePreferencesSnapshot(pinnedCourseIDs: [pinnedCourse.id])
+        )
+        defer { harness.cleanup() }
+
+        let items = harness.store.priorityNowItems(courseID: nil)
+        #expect(items.first?.title == "Problem Set")
+        #expect(harness.store.dashboardFocusItem(courseID: nil)?.title == "Problem Set")
+    }
+
+    @Test func homeDashboardDisplayStateReusesPrioritizedInputs() async throws {
+        let referenceDate = Date()
+        let missing = MissingSubmission(
+            id: 10,
+            name: "Problem Set",
+            dueAt: referenceDate.addingTimeInterval(-60 * 60),
+            courseID: 1,
+            htmlURL: nil,
+            pointsPossible: 10
+        )
+        let highlightedEvent = UpcomingEvent(
+            id: "event-highlighted",
+            title: "Quiz",
+            details: nil,
+            startAt: referenceDate.addingTimeInterval(60 * 60),
+            endAt: referenceDate.addingTimeInterval(60 * 60),
+            allDay: false,
+            contextCode: "course_1",
+            htmlURL: nil,
+            workflowState: "active",
+            assignment: nil
+        )
+        let laterEvent = UpcomingEvent(
+            id: "event-later",
+            title: "Project",
+            details: nil,
+            startAt: referenceDate.addingTimeInterval(9 * 24 * 60 * 60),
+            endAt: referenceDate.addingTimeInterval(9 * 24 * 60 * 60),
+            allDay: false,
+            contextCode: "course_1",
+            htmlURL: nil,
+            workflowState: "active",
+            assignment: nil
+        )
+        let state = HomeDashboardDisplayState(
+            prioritizedMissingSubmissions: [missing],
+            prioritizedUpcomingEvents: [highlightedEvent, laterEvent],
+            priorityNowItems: [
+                CanvasStore.DashboardPriorityItem(kind: .missing(missing), score: 200),
+                CanvasStore.DashboardPriorityItem(kind: .upcoming(highlightedEvent), score: 100)
+            ],
+            referenceDate: referenceDate
+        )
+
+        #expect(state.focusItem?.title == "Problem Set")
+        #expect(state.secondaryPriorityNowItems.map(\.title) == ["Quiz"])
+        #expect(state.overdueSectionSubmissions.isEmpty)
+        #expect(state.todayEvents.isEmpty)
+        #expect(state.thisWeekEvents.isEmpty)
+        #expect(state.laterEvents.map(\.title) == ["Project"])
+    }
+
+    @MainActor
+    @Test func canvasStoreFilteredUpcomingEventsExcludeMissingAssignments() async throws {
+        let course = makeCourse(id: 10, name: "Biology")
+        let dueAt = Date().addingTimeInterval(60 * 60)
+        let missing = MissingSubmission(
+            id: 44,
+            name: "Late Essay",
+            dueAt: dueAt,
+            courseID: course.id,
+            htmlURL: URL(string: "https://canvas.example.edu/courses/10/assignments/44"),
+            pointsPossible: 20
+        )
+        let duplicateEvent = UpcomingEvent(
+            id: "assignment_44",
+            title: "Late Essay",
+            details: nil,
+            startAt: dueAt,
+            endAt: dueAt,
+            allDay: false,
+            contextCode: "course_10",
+            htmlURL: URL(string: "https://canvas.example.edu/calendar_events/44"),
+            workflowState: "active",
+            assignment: CanvasAssignment(
+                id: 44,
+                name: "Late Essay",
+                dueAt: dueAt,
+                courseID: course.id,
+                htmlURL: URL(string: "https://canvas.example.edu/courses/10/assignments/44"),
+                pointsPossible: 20
+            )
+        )
+        let standaloneEvent = UpcomingEvent(
+            id: "event-7",
+            title: "Study Group",
+            details: nil,
+            startAt: dueAt,
+            endAt: dueAt,
+            allDay: false,
+            contextCode: "course_10",
+            htmlURL: URL(string: "https://canvas.example.edu/calendar_events/7"),
+            workflowState: "active",
+            assignment: nil
+        )
+        let harness = try makeCanvasStoreHarness(
+            courses: [course],
+            foldersByCourseID: [:],
+            filesByFolderID: [:],
+            upcomingEvents: [duplicateEvent, standaloneEvent],
+            missingSubmissions: [missing]
+        )
+        defer { harness.cleanup() }
+
+        #expect(harness.store.filteredUpcomingEvents(courseID: nil).map(\.title) == ["Study Group"])
+        #expect(harness.store.filteredUpcomingEvents(courseID: course.id).map(\.title) == ["Study Group"])
+        #expect(harness.store.priorityNowItems(courseID: nil).map(\.title) == ["Late Essay", "Study Group"])
+    }
+
+    @MainActor
+    @Test func canvasStorePriorityNowUsesPinnedBonusWithinComparableMissingWork() async throws {
+        let dueAt = Date(timeIntervalSince1970: 1_710_000_000)
+        let courseA = makeCourse(id: 1, name: "Course A")
+        let courseB = makeCourse(id: 2, name: "Course B")
+        let missingA = MissingSubmission(
+            id: 1,
+            name: "Lab A",
+            dueAt: dueAt,
+            courseID: courseA.id,
+            htmlURL: nil,
+            pointsPossible: nil
+        )
+        let missingB = MissingSubmission(
+            id: 2,
+            name: "Lab B",
+            dueAt: dueAt,
+            courseID: courseB.id,
+            htmlURL: nil,
+            pointsPossible: nil
+        )
+
+        let harness = try makeCanvasStoreHarness(
+            courses: [courseA, courseB],
+            foldersByCourseID: [:],
+            filesByFolderID: [:],
+            missingSubmissions: [missingA, missingB],
+            coursePreferences: CoursePreferencesSnapshot(pinnedCourseIDs: [courseB.id])
+        )
+        defer { harness.cleanup() }
+
+        let prioritized = harness.store.prioritizedMissingSubmissions(courseID: nil)
+        #expect(prioritized.first?.id == missingB.id)
+    }
+
     @Test func recentSearchManagerSavesCapsAndClearsTerms() async throws {
         let storageURL = makeRecentSearchTempURL()
         let fileManager = FileManager.default
@@ -2853,6 +3655,9 @@ struct Events_TrackerTests {
         courses: [Course],
         foldersByCourseID: [Int: [CanvasFolder]],
         filesByFolderID: [Int: [CanvasFile]],
+        upcomingEvents: [UpcomingEvent] = [],
+        missingSubmissions: [MissingSubmission] = [],
+        coursePreferences: CoursePreferencesSnapshot = CoursePreferencesSnapshot(),
         fileDownloadSnapshot: FileDownloadSnapshot = FileDownloadSnapshot(),
         config: CanvasConfig = CanvasConfig(
             baseURL: "https://canvas.example.edu",
@@ -2864,9 +3669,12 @@ struct Events_TrackerTests {
         let configURL = makeCanvasConfigTempURL()
         let dashboardCacheURL = makeDashboardCacheTempURL()
         let courseDetailCacheURL = makeCourseDetailCacheTempURL()
+        let preferencesURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "EventsTracker-\(UUID().uuidString)-course-preferences.json"
+        )
         let fileMetadataURL = makeFileDownloadMetadataTempURL()
         let downloadsURL = makeDownloadsTempDirectoryURL()
-        let urls = [configURL, dashboardCacheURL, courseDetailCacheURL, fileMetadataURL, downloadsURL]
+        let urls = [configURL, dashboardCacheURL, courseDetailCacheURL, preferencesURL, fileMetadataURL, downloadsURL]
         urls.forEach { try? FileManager.default.removeItem(at: $0) }
 
         let configManager = CanvasConfigManager(configURL: configURL, tokenStore: InMemoryCanvasTokenStore())
@@ -2875,8 +3683,8 @@ struct Events_TrackerTests {
         let databaseManager = DatabaseManager(cacheURL: dashboardCacheURL)
         try databaseManager.saveSnapshot(CanvasSnapshot(
             courses: courses,
-            upcomingEvents: [],
-            missingSubmissions: [],
+            upcomingEvents: upcomingEvents,
+            missingSubmissions: missingSubmissions,
             profile: nil,
             syncedAt: Date()
         ))
@@ -2901,11 +3709,15 @@ struct Events_TrackerTests {
         )
         try fileDownloadManager.saveSnapshot(fileDownloadSnapshot)
 
+        let preferenceManager = CoursePreferenceManager(preferencesURL: preferencesURL)
+        try preferenceManager.savePreferences(coursePreferences)
+
         let store = CanvasStore(
             configManager: configManager,
             databaseManager: databaseManager,
             networkManager: .shared,
             detailCacheManager: detailCacheManager,
+            preferenceManager: preferenceManager,
             fileDownloadManager: fileDownloadManager
         )
 

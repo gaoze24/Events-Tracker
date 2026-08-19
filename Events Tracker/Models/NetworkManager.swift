@@ -197,13 +197,18 @@ final class NetworkManager {
             config: config
         )
 
-        return people.sorted {
-            if $0.primaryRole.sortPriority != $1.primaryRole.sortPriority {
-                return $0.primaryRole.sortPriority < $1.primaryRole.sortPriority
+        return people
+            .map { person in
+                (person: person, rolePriority: person.primaryRole.sortPriority)
             }
+            .sorted {
+                if $0.rolePriority != $1.rolePriority {
+                    return $0.rolePriority < $1.rolePriority
+                }
 
-            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-        }
+                return $0.person.name.localizedCaseInsensitiveCompare($1.person.name) == .orderedAscending
+            }
+            .map(\.person)
     }
 
     func fetchConversations(

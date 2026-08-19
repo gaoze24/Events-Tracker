@@ -40,6 +40,10 @@ enum DisplayFormatters {
         return dateTime.string(from: date)
     }
 
+    static func rowDateText(date: Date?, allDay: Bool = false) -> String {
+        formatted(date: date, allDay: allDay)
+    }
+
     static func relativeString(date: Date?) -> String? {
         guard let date else {
             return nil
@@ -62,15 +66,56 @@ enum DisplayFormatters {
 }
 
 struct SetupPromptView: View {
+    @Environment(\.appUIStyle) private var style
     let title: String
     let message: String
+    var systemImage: String = "link.badge.plus"
+    var tint: Color = .accentColor
 
     var body: some View {
-        ContentUnavailableView(
-            title,
-            systemImage: "link.badge.plus",
-            description: Text(message)
-        )
+        VStack(spacing: 18) {
+            ZStack {
+                if style.isVivid {
+                    Circle()
+                        .fill(tint.opacity(0.18))
+                        .frame(width: 124, height: 124)
+                        .blur(radius: 22)
+                }
+
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: style.isVivid
+                                ? [tint.opacity(0.30), tint.opacity(0.10)]
+                                : [tint.opacity(0.22), tint.opacity(0.08)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .overlay(
+                        Circle()
+                            .strokeBorder(tint.opacity(style.isVivid ? 0.30 : 0), lineWidth: 1)
+                    )
+                    .frame(width: 96, height: 96)
+
+                Image(systemName: systemImage)
+                    .font(.system(size: 38, weight: .medium))
+                    .foregroundStyle(tint)
+                    .shadow(color: tint.opacity(style.isVivid ? 0.4 : 0), radius: 6, x: 0, y: 2)
+            }
+
+            VStack(spacing: 6) {
+                Text(title)
+                    .font(.title2.weight(.semibold))
+
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 460)
+            }
+        }
+        .padding(36)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
@@ -83,39 +128,51 @@ struct SummaryCard: View {
     let tint: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                Image(systemName: systemImage)
-                    .foregroundStyle(tint)
-                    .font(.subheadline)
-                Text(title)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            Text(value)
-                .font(.system(size: 24, weight: .semibold, design: .rounded))
-                .foregroundStyle(.primary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(Color.primary.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        MetricCard(
+            title: title,
+            value: value,
+            detail: detail,
+            systemImage: systemImage,
+            tint: tint
+        )
     }
 }
 
 struct PillBadge: View {
+    @Environment(\.appUIStyle) private var style
     let text: String
     let tint: Color
 
     var body: some View {
         Text(text)
-            .font(.caption.weight(.semibold))
-            .padding(.horizontal, 8)
+            .font(.caption2.weight(style.isVivid ? .bold : .semibold))
+            .textCase(.uppercase)
+            .kerning(0.4)
+            .padding(.horizontal, 9)
             .padding(.vertical, 4)
-            .background(tint.opacity(0.12))
+            .background(fill)
+            .overlay(
+                Capsule()
+                    .strokeBorder(tint.opacity(style.isVivid ? 0.35 : 0.25), lineWidth: style.isVivid ? 0.6 : 0.5)
+            )
             .foregroundStyle(tint)
-            .clipShape(Capsule())
+    }
+
+    @ViewBuilder
+    private var fill: some View {
+        if style.isVivid {
+            Capsule()
+                .fill(
+                    LinearGradient(
+                        colors: [tint.opacity(0.22), tint.opacity(0.12)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        } else {
+            Capsule()
+                .fill(tint.opacity(0.15))
+        }
     }
 }
 
@@ -147,17 +204,11 @@ struct UpcomingEventRow: View {
 
             HStack(spacing: 12) {
                 Label(
-                    DisplayFormatters.formatted(date: event.displayDate, allDay: event.allDay),
+                    DisplayFormatters.rowDateText(date: event.displayDate, allDay: event.allDay),
                     systemImage: "clock"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
-
-                if let relative = DisplayFormatters.relativeString(date: event.displayDate) {
-                    Text(relative)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
 
                 Spacer()
 
@@ -196,17 +247,11 @@ struct MissingSubmissionRow: View {
 
             HStack(spacing: 12) {
                 Label(
-                    DisplayFormatters.formatted(date: submission.dueAt),
+                    DisplayFormatters.rowDateText(date: submission.dueAt),
                     systemImage: "exclamationmark.triangle"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
-
-                if let relative = DisplayFormatters.relativeString(date: submission.dueAt) {
-                    Text(relative)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
 
                 Spacer()
 
@@ -315,9 +360,7 @@ struct CourseModuleCard: View {
                 }
             }
         }
-        .padding(18)
-        .background(Color.primary.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .appCard()
     }
 }
 
@@ -470,13 +513,55 @@ struct CourseAssignmentRow: View {
 
                 Spacer()
 
-                if let url = assignment.htmlURL {
-                    Link("Open in Canvas", destination: url)
-                        .font(.caption.weight(.semibold))
-                }
+                AssignmentExternalActions(assignment: assignment)
             }
         }
         .padding(.vertical, 8)
+    }
+}
+
+struct AssignmentExternalActions: View {
+    let assignment: CourseAssignment
+    var font: Font = .caption.weight(.semibold)
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if assignment.showsSubmissionAction, let submissionURL = assignment.submissionURL {
+                Link(assignment.submissionActionTitle, destination: submissionURL)
+                    .font(font)
+            }
+
+            if let canvasURL = assignment.canvasURL {
+                Link("Open in Canvas", destination: canvasURL)
+                    .font(font)
+            }
+        }
+    }
+}
+
+struct AssignmentCompactActions: View {
+    let assignment: CourseAssignment
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if assignment.showsSubmissionAction, let submissionURL = assignment.submissionURL {
+                Link(destination: submissionURL) {
+                    Image(systemName: assignment.submissionActionTitle == "View Submission" ? "doc.text.magnifyingglass" : "paperplane")
+                        .foregroundStyle(Color.accentColor)
+                        .font(.caption)
+                }
+                .help(assignment.submissionActionTitle)
+            }
+
+            if let canvasURL = assignment.canvasURL {
+                Link(destination: canvasURL) {
+                    Image(systemName: "arrow.up.right.square")
+                        .foregroundStyle(Color.secondary.opacity(0.5))
+                        .font(.caption)
+                }
+                .help("Open in Canvas")
+            }
+        }
     }
 }
 
@@ -505,10 +590,10 @@ struct AssignmentDetailView: View {
                 }
 
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 12) {
-                    AssignmentDetailMetric(title: "Due", value: DisplayFormatters.formatted(date: assignment.dueAt), systemImage: "clock")
-                    AssignmentDetailMetric(title: "Points", value: assignment.pointsDescription.map { "\($0) pts" } ?? "No points", systemImage: "number")
-                    AssignmentDetailMetric(title: "Score", value: assignment.scoreDescription ?? "Not scored", systemImage: "checkmark.seal")
-                    AssignmentDetailMetric(title: "Grade", value: assignment.gradeDescription ?? "Not graded", systemImage: "graduationcap")
+                    AssignmentDetailMetric(title: "Due", value: DisplayFormatters.formatted(date: assignment.dueAt), systemImage: "clock", tint: .blue)
+                    AssignmentDetailMetric(title: "Points", value: assignment.pointsDescription.map { "\($0) pts" } ?? "No points", systemImage: "number", tint: .purple)
+                    AssignmentDetailMetric(title: "Score", value: assignment.scoreDescription ?? "Not scored", systemImage: "checkmark.seal", tint: .green)
+                    AssignmentDetailMetric(title: "Grade", value: assignment.gradeDescription ?? "Not graded", systemImage: "graduationcap", tint: .orange)
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
@@ -520,6 +605,9 @@ struct AssignmentDetailView: View {
                     AssignmentDetailInfoRow(title: "Graded", value: DisplayFormatters.relativeString(date: assignment.submission?.gradedAt) ?? DisplayFormatters.formatted(date: assignment.submission?.gradedAt))
                     AssignmentDetailInfoRow(title: "Type", value: assignment.submission?.submissionType ?? assignment.submissionTypes?.joined(separator: ", ") ?? "Not specified")
                     AssignmentDetailInfoRow(title: "Attempt", value: assignment.submission?.attempt.map(String.init) ?? "No attempt recorded")
+
+                    AssignmentExternalActions(assignment: assignment, font: .headline)
+                        .padding(.top, 4)
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
@@ -540,11 +628,6 @@ struct AssignmentDetailView: View {
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-
-                if let htmlURL = assignment.htmlURL {
-                    Link("Open in Canvas", destination: htmlURL)
-                        .font(.headline)
-                }
             }
             .padding(24)
             .frame(maxWidth: 720, alignment: .leading)
@@ -556,20 +639,27 @@ private struct AssignmentDetailMetric: View {
     let title: String
     let value: String
     let systemImage: String
+    let tint: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: systemImage)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        HStack(alignment: .top, spacing: 12) {
+            IconBadge(systemImage: systemImage, tint: tint, size: 32)
 
-            Text(value)
-                .font(.headline)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                    .kerning(0.5)
+
+                Text(value)
+                    .font(.headline)
+            }
+
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(Color.primary.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .appCard(padding: 14)
     }
 }
 
@@ -587,5 +677,69 @@ private struct AssignmentDetailInfoRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .font(.subheadline)
+    }
+}
+
+/// A leading-aligned layout that arranges subviews in a horizontal row and
+/// wraps to the next line when the proposed width runs out. Its minimum width
+/// is only as wide as the single widest subview, so dense button clusters can
+/// live inside narrow columns without forcing the surrounding layout wider
+/// than the window (which would otherwise clip content off the right edge).
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+    var lineSpacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var rowWidth: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var totalHeight: CGFloat = 0
+        var widestRow: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+
+            if rowWidth > 0 && rowWidth + spacing + size.width > maxWidth {
+                widestRow = max(widestRow, rowWidth)
+                totalHeight += rowHeight + lineSpacing
+                rowWidth = size.width
+                rowHeight = size.height
+            } else {
+                rowWidth += (rowWidth > 0 ? spacing : 0) + size.width
+                rowHeight = max(rowHeight, size.height)
+            }
+        }
+
+        widestRow = max(widestRow, rowWidth)
+        totalHeight += rowHeight
+
+        let resolvedWidth = proposal.width.map { min(widestRow, $0) } ?? widestRow
+        return CGSize(width: max(0, resolvedWidth), height: totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) {
+        let maxWidth = bounds.width
+        var x: CGFloat = bounds.minX
+        var y: CGFloat = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+
+            if x > bounds.minX && x + size.width > bounds.minX + maxWidth {
+                x = bounds.minX
+                y += rowHeight + lineSpacing
+                rowHeight = 0
+            }
+
+            subview.place(
+                at: CGPoint(x: x, y: y),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(size)
+            )
+
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }
